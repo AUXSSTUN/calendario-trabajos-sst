@@ -582,3 +582,54 @@ textarea { resize: vertical; min-height: 74px; line-height: 1.4; }
 label:not(.opcion) { display: block; }
 label:not(.opcion) > input, label:not(.opcion) > select, label:not(.opcion) > textarea { display: block; margin-top: 5px; }
 .etq { display: block; margin-bottom: 5px; }
+
+/* ---------- Grupos de contratistas ---------- */
+.grupo-card + .grupo-card { margin-top: 14px; }
+.grupo-card.inactivo { opacity: .62; }
+.grupo-cab { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.grupo-cab h3 { margin: 0; font-size: 19px; }
+.grupo-cab h2 { font-family: var(--f-display); font-weight: 400; font-size: 26px; text-transform: uppercase; margin: 2px 0 0; }
+.grupo-cab .sub { color: var(--muted); font-size: 13px; margin: 3px 0 0; }
+.grupo-cab .codigo { background: color-mix(in srgb, var(--rojo) 8%, transparent); padding: 6px 12px; border-radius: 10px; }
+.g-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--rojo); }
+.grupo-stats { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.grupo-stats > span:not(.chip-e) { font-size: 12.5px; color: var(--muted); background: var(--bg); padding: 5px 11px; border-radius: 999px; font-weight: 600; }
+.grupo-stats b { color: var(--fg); font-family: var(--f-data); }
+.grupo-stats .mal b { color: var(--s-faltan); }
+.grupo-pub { margin-top: 16px; }
+.volver-grupo { margin-top: 14px; }
+.g-herr { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.g-herr .entrada { flex: 1; min-width: 200px; }
+.g-lista { display: grid; gap: 6px; max-height: 360px; overflow: auto; padding-right: 2px; }
+.g-fila { align-items: flex-start; }
+.g-fila[hidden] { display: none; }
+.g-fila-txt { flex: 1; display: grid; gap: 2px; min-width: 0; }
+.g-fila-txt small { color: var(--muted); font-weight: 500; font-size: 12px; }
+.g-fila-txt em { color: var(--ok); font-style: normal; font-weight: 700; }
+.g-cod { font-size: 11.5px; letter-spacing: 1px; align-self: center; }
+.g-trabajo { text-align: left; }
+.g-pie { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 2px; }
+.g-pie b { color: var(--s-faltan); }
+.g-pie .ok { color: var(--ok); font-weight: 700; }
+.g-pie .ir { color: var(--rojo); font-weight: 700; }
+.g-cerrados { margin-top: 18px; }
+.g-cerrados summary { cursor: pointer; font-weight: 700; color: var(--muted); font-size: 14px; }
+.grupo-reg { border: 1.5px dashed color-mix(in srgb, var(--rojo) 35%, transparent); }
+.grupo-reg-fila { display: grid; grid-template-columns: minmax(0, 260px) 1fr; gap: 16px; align-items: center; }
+.grupo-reg input[name="grupo_codigo"] { text-transform: uppercase; font-family: var(--f-data); letter-spacing: 1.5px; }
+.grupo-estado { font-size: 13px; color: var(--muted); font-weight: 500; line-height: 1.45; }
+.grupo-estado.ok { color: var(--ok); font-weight: 600; }
+.grupo-estado.mal { color: var(--s-faltan); font-weight: 600; }
+@media (max-width: 700px) { .grupo-reg-fila { grid-template-columns: 1fr; } }
+
+/* ---------- Avisos ---------- */
+.secciones .campana { position: relative; width: 34px; height: 34px; padding: 0; display: grid; place-items: center; font-size: 15px; }
+.campana .badge { position: absolute; top: -2px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--rojo); color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; font-family: var(--f-data); animation: pop .4s var(--ease); }
+.toast.con-accion { pointer-events: auto; display: flex; align-items: center; gap: 12px; }
+.toast.con-accion button { border: 0; border-radius: 999px; padding: 5px 13px; background: var(--roble); color: var(--negro); font-weight: 800; font-size: 12.5px; cursor: pointer; flex-shrink: 0; }
+.av-lista { display: grid; gap: 6px; }
+.av-item { text-align: left; display: grid; gap: 2px; border: 0; background: var(--bg); border-left: 4px solid var(--s-aprobar); border-radius: 10px; padding: 9px 12px; cursor: pointer; color: var(--fg); transition: transform .15s; }
+.av-item:hover { transform: translateX(3px); }
+.av-item span { font-size: 12.5px; color: var(--muted); }
+.av-item small { font-size: 11.5px; color: var(--muted); font-family: var(--f-data); }
+.chip-ok { display: inline-flex; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: var(--s-aldia-soft); color: var(--s-aldia-ink); }
