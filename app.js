@@ -644,7 +644,7 @@
         ['consultar', 'Consultar con código', 'Subir y revisar documentos'],
         ['calendario', 'Ingreso equipo SST', 'Calendario y revisión']
       ].map(([t, a, b], i) => `<li style="--i:${i}"><button data-acc="tab" data-tab="${t}" aria-current="${S.pestana === t}">${a}<small>${b}</small></button></li>`).join('');
-      pie.innerHTML = '<div>Si tienes dudas sobre los documentos, comunícate con el equipo de SST.</div>';
+      pie.innerHTML = '<div>¿Tienes dudas sobre los documentos o el registro? Escríbenos a:<br><a href="mailto:aglopez@uninorte.edu.co" style="color:#fff;font-weight:700">aglopez@uninorte.edu.co</a><br><a href="mailto:aux_sst@uninorte.edu.co" style="color:#fff;font-weight:700">aux_sst@uninorte.edu.co</a></div>'; pie.style.display = 'grid';
     }
     if (railAnimado) $$('li', meses).forEach((li) => { li.style.animation = 'none'; });
     railAnimado = true;
