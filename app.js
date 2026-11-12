@@ -1006,6 +1006,7 @@
             <span class="enlace-txt">${esc(enlace)}</span>
           </div>
         </div>
+        ${window.cajaCorreo ? window.cajaCorreo(t) : ''}
         ${faseHTML(t, 'Documentos para iniciar', res.antes, res.req.antes, 'sst')}
         ${faseHTML(t, 'Documentos de cierre (al finalizar)', res.despues, res.req.despues, 'sst', !fin)}
         <div class="caja"><h3>Observaciones internas</h3>
@@ -1629,5 +1630,6 @@
     render();
   }
 
+  window.SSTApp = { S, docDe, resumenDocs, terminado, rangoTexto, horarioCorto, enlaceContratista, esc, aviso };
   iniciar();
 })();
