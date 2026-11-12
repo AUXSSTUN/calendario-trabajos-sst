@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calendario de Trabajos · SST Uninorte</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Albert+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap">
+  <link rel="stylesheet" href="estilos.css">
+  <script src="marca.js"></script>
+  <script>
+    // Tema (claro/oscuro) y logo antes de pintar, para que no parpadee
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('sst-tema'); } catch (e) {}
+      if (!t) t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+      if (window.MARCA) {
+        document.documentElement.style.setProperty('--logo-url', 'url(' + MARCA.logo + ')');
+        var l = document.createElement('link'); l.rel = 'icon'; l.type = 'image/png'; l.href = MARCA.favicon;
+        document.head.appendChild(l);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="app" id="raiz">
+    <aside class="rail" id="rail" aria-label="Navegación">
+      <div class="brand">
+        <span class="logo" role="img" aria-label="Universidad del Norte"></span>
+        <div class="unit"><b>Seguridad y Salud en el Trabajo</b>Trabajos de contratistas</div>
+        <div class="year" id="anio"></div>
+      </div>
+      <ul class="months" id="meses"></ul>
+      <div class="rail-foot" id="pie-rail"></div>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div class="eyebrow"><span class="logo" role="img" aria-label="Universidad del Norte"></span><span class="sep"></span>SST · Uninorte</div>
+        <nav class="secciones" id="secciones" aria-label="Secciones"></nav>
+      </div>
+      <div id="vista"></div>
+    </main>
+  </div>
+
+  <input type="file" id="archivo-oculto" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" hidden>
+  <div id="board-root"></div>
+  <div id="confirm-root"></div>
+  <div id="toast-root" aria-live="polite"></div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
