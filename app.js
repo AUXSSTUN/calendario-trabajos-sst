@@ -7,11 +7,12 @@
 
 (() => {
   const CFG = Object.assign({
-    SUPABASE_URL: '', SUPABASE_KEY: '', SST_EMAIL: '',
+    SUPABASE_URL: '', SUPABASE_KEY: '', SST_EMAIL: '', CORREO_AVISOS: '',
     NOMBRE: 'Calendario de Trabajos', SUBTITULO: 'Seguridad y Salud en el Trabajo',
     BUCKET: 'documentos-trabajos'
   }, window.CONFIG || {});
   const MODO_DEMO = !CFG.SUPABASE_URL || !CFG.SUPABASE_KEY;
+  const CORREO_AVISOS = CFG.CORREO_AVISOS || CFG.SST_EMAIL;
   const MAX_MB = 10;
   const TIPOS_OK = ['application/pdf', 'image/jpeg', 'image/png'];
 
@@ -83,10 +84,14 @@
     if (t.hora_inicio && t.hora_fin) return `${hora(t.hora_inicio)} – ${hora(t.hora_fin)}`;
     return hora(t.hora_inicio) || '';
   }
+  const urlBase = () => location.href.split('?')[0].split('#')[0];
   function enlaceContratista(codigo) {
-    const base = location.href.split('?')[0].split('#')[0];
-    return `${base}?codigo=${encodeURIComponent(codigo)}`;
+    return `${urlBase()}?codigo=${encodeURIComponent(codigo)}`;
   }
+  function enlaceGrupo(codigo) {
+    return `${urlBase()}?grupo=${encodeURIComponent(codigo)}`;
+  }
+  const esCodigoGrupo = (c) => /^G-/i.test(String(c || '').trim());
 
   /* ------------------------------------------------------------------
      Estado de la aplicación
@@ -101,15 +106,21 @@
     trabajos: [],
     documentos: [],
     requisitos: [],
-    filtros: { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', pendientes: true },
+    grupos: [],
+    filtros: { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', grupo: '', pendientes: true },
     detalleId: null,
     rechazando: null,
     subida: null,
     registro: null,       // resultado de un registro externo exitoso
     consulta: null,       // { trabajo, documentos } consultados con código
     codigoConsulta: '',
+    grupoConsulta: null,  // { grupo, trabajos } consultados con el código del grupo
+    grupoRegistro: null,  // grupo con el que se abre el formulario de registro
+    grupoValido: '',      // código de grupo ya verificado en el registro
+    abrirTras: '',        // código de trabajo para abrir después de ingresar
     cargando: true
   };
+  const grupoDe = (id) => (id ? S.grupos.find((g) => g.id === id) : null);
 
   /* ------------------------------------------------------------------
      Reglas de documentos
@@ -219,13 +230,14 @@
     },
     desuscribir() { if (this.canal) { this.sb.removeChannel(this.canal); this.canal = null; } },
     async cargar() {
-      const [t, d, r] = await Promise.all([
+      const [t, d, r, g] = await Promise.all([
         this.sb.from('trabajos').select('*').order('fecha_inicio', { ascending: true }),
         this.sb.from('trabajos_documentos').select('*'),
-        this.sb.from('trabajos_requisitos').select('*').order('orden', { ascending: true })
+        this.sb.from('trabajos_requisitos').select('*').order('orden', { ascending: true }),
+        this.sb.from('trabajos_grupos').select('*').order('nombre', { ascending: true })
       ]);
-      lanzar(t.error); lanzar(d.error); lanzar(r.error);
-      S.trabajos = t.data; S.documentos = d.data; S.requisitos = r.data;
+      lanzar(t.error); lanzar(d.error); lanzar(r.error); lanzar(g.error);
+      S.trabajos = t.data; S.documentos = d.data; S.requisitos = r.data; S.grupos = g.data;
     },
     async cargarRequisitosPublicos() {
       const { data, error } = await this.sb.from('trabajos_requisitos').select('*').eq('activo', true).order('orden');
@@ -277,6 +289,28 @@
       const { data, error } = await this.sb.rpc('trabajos_registrar_externo', { datos });
       lanzar(error); return data;
     },
+    async guardarGrupo(g) {
+      const datos = limpiarGrupo(g);
+      const q = g.id
+        ? this.sb.from('trabajos_grupos').update(datos).eq('id', g.id).select().single()
+        : this.sb.from('trabajos_grupos').insert(datos).select().single();
+      const { data, error } = await q; lanzar(error); return data;
+    },
+    async eliminarGrupo(id) {
+      const { error } = await this.sb.from('trabajos_grupos').delete().eq('id', id); lanzar(error);
+    },
+    async asignarGrupo(grupoId, agregar, quitar) {
+      if (agregar.length) { const { error } = await this.sb.from('trabajos').update({ grupo_id: grupoId }).in('id', agregar); lanzar(error); }
+      if (quitar.length) { const { error } = await this.sb.from('trabajos').update({ grupo_id: null }).in('id', quitar); lanzar(error); }
+    },
+    async infoGrupo(codigo) {
+      const { data, error } = await this.sb.rpc('trabajos_grupo_info', { p_codigo: codigo });
+      lanzar(error); return data;
+    },
+    async consultarGrupo(codigo) {
+      const { data, error } = await this.sb.rpc('trabajos_consultar_grupo', { p_codigo: codigo });
+      lanzar(error); return data;
+    },
     async consultar(codigo) {
       const { data, error } = await this.sb.rpc('trabajos_consultar', { p_codigo: codigo });
       lanzar(error); return data;
@@ -301,7 +335,14 @@
       lugar: t.lugar, fecha_inicio: t.fecha_inicio, fecha_fin: t.fecha_fin,
       hora_inicio: vacioANull(t.hora_inicio), hora_fin: vacioANull(t.hora_fin),
       riesgos: t.riesgos || [], estado: t.estado || 'programado',
-      observaciones: vacioANull(t.observaciones)
+      observaciones: vacioANull(t.observaciones), grupo_id: vacioANull(t.grupo_id)
+    };
+  }
+
+  function limpiarGrupo(g) {
+    return {
+      nombre: g.nombre, contacto: vacioANull(g.contacto), correo: vacioANull(g.correo),
+      telefono: vacioANull(g.telefono), notas: vacioANull(g.notas), activo: g.activo !== false
     };
   }
 
@@ -340,13 +381,15 @@
     ['caliente', 'despues', 'Cierre del permiso de trabajo en caliente', 'Incluye vigilancia del área después de terminar (mín. 30 min).', false, 94]
   ];
 
-  const demo = { trabajos: [], documentos: [], requisitos: [], archivos: new Map() };
+  const demo = { trabajos: [], documentos: [], requisitos: [], grupos: [], archivos: new Map() };
 
   function crearDemo() {
     demo.requisitos = REQ_BASE.map(([riesgo, fase, nombre, descripcion, solo, orden]) => ({
       id: uid(), riesgo, fase, nombre, descripcion, solo_contratistas: solo, orden, activo: true
     }));
     const h = hoy();
+    demo.grupos = [{ id: uid(), codigo: 'G-DEMO2026', nombre: 'Metalmecánica Atlántico Ltda.', contacto: 'Luis Gómez', correo: 'contacto@metalatlantico.com', telefono: '300 555 0199', notas: 'Hace trabajos de soldadura casi todas las semanas.', activo: true, created_at: new Date().toISOString() }];
+    const GD = demo.grupos[0].id;
     const base = {
       descripcion: '', tipo_ejecutor: 'contratista', telefono: '300 555 0101', correo: 'contacto@empresa.com.co',
       interventor: 'Planta Física', num_trabajadores: 3, hora_inicio: '07:00', hora_fin: '16:00',
@@ -355,7 +398,8 @@
     const T = (o) => ({ id: uid(), codigo: nuevoCodigo(), created_at: new Date().toISOString(), ...base, ...o });
     const lista = [
       T({ titulo: 'Mantenimiento de cubierta', empresa: 'Techos del Caribe S.A.S.', responsable: 'Carlos Pérez', lugar: 'Bloque G · cubierta', fecha_inicio: sumarDias(h, -1), fecha_fin: sumarDias(h, 2), riesgos: ['alturas'], estado: 'en_ejecucion', num_trabajadores: 4, _docs: { antes: [99, 'aprobado'] } }),
-      T({ titulo: 'Soldadura de barandas en escalera', empresa: 'Metalmecánica Atlántico Ltda.', responsable: 'Luis Gómez', lugar: 'Bloque K · escalera norte', fecha_inicio: sumarDias(h, 3), fecha_fin: sumarDias(h, 4), riesgos: ['alturas', 'caliente', 'cilindros'], estado: 'programado', descripcion: 'Corte y soldadura de barandas metálicas con equipo oxiacetilénico.', _docs: { antes: [5, 'enviado'] } }),
+      T({ titulo: 'Soldadura de barandas en escalera', empresa: 'Metalmecánica Atlántico Ltda.', responsable: 'Luis Gómez', lugar: 'Bloque K · escalera norte', fecha_inicio: sumarDias(h, 3), fecha_fin: sumarDias(h, 4), riesgos: ['alturas', 'caliente', 'cilindros'], estado: 'programado', descripcion: 'Corte y soldadura de barandas metálicas con equipo oxiacetilénico.', grupo_id: GD, _docs: { antes: [5, 'enviado'] } }),
+      T({ titulo: 'Fabricación de rejillas metálicas', empresa: 'Metalmecánica Atlántico Ltda.', responsable: 'Luis Gómez', lugar: 'Bloque J · cuarto de bombas', fecha_inicio: sumarDias(h, 8), fecha_fin: sumarDias(h, 8), riesgos: ['caliente'], estado: 'por_aprobar', origen: 'externo', grupo_id: GD, num_trabajadores: 2, _docs: { antes: [2, 'enviado'] } }),
       T({ titulo: 'Lavado y desinfección de tanque de agua', empresa: 'Hidrolimpieza Costa S.A.S.', responsable: 'María Rodríguez', lugar: 'Tanque subterráneo · Bloque A', fecha_inicio: sumarDias(h, 6), fecha_fin: sumarDias(h, 6), riesgos: ['confinados'], estado: 'programado', _docs: { antes: [99, 'enviado'] } }),
       T({ titulo: 'Cambio de luminarias del auditorio', tipo_ejecutor: 'funcionario', empresa: 'Planta Física · Mantenimiento eléctrico', responsable: 'Jorge Herrera', lugar: 'Auditorio principal', fecha_inicio: sumarDias(h, -6), fecha_fin: sumarDias(h, -5), riesgos: ['alturas'], estado: 'finalizado', interventor: '', _docs: { antes: [99, 'aprobado'] } }),
       T({ titulo: 'Recarga y cambio de cilindros de gas', empresa: 'Gases Industriales del Norte', responsable: 'Andrés Torres', lugar: 'Laboratorio de Química', fecha_inicio: sumarDias(h, 1), fecha_fin: sumarDias(h, 1), riesgos: ['cilindros'], estado: 'por_aprobar', origen: 'externo', hora_inicio: '09:00', hora_fin: '11:00', num_trabajadores: 2, _docs: { antes: [3, 'enviado'] } }),
@@ -395,7 +439,7 @@
     async init() { crearDemo(); S.sesion = true; S.usuario = 'demostración'; },
     async login() { S.sesion = true; S.usuario = 'demostración'; },
     async logout() { S.sesion = false; S.usuario = ''; },
-    async cargar() { S.trabajos = copia(demo.trabajos); S.documentos = copia(demo.documentos); S.requisitos = copia(demo.requisitos); },
+    async cargar() { S.trabajos = copia(demo.trabajos); S.documentos = copia(demo.documentos); S.requisitos = copia(demo.requisitos); S.grupos = copia(demo.grupos); },
     async cargarRequisitosPublicos() { S.requisitos = copia(demo.requisitos.filter((r) => r.activo)); },
     async guardarTrabajo(t) {
       const datos = limpiarTrabajo(t);
@@ -431,8 +475,40 @@
     },
     async registrarExterno(datos) {
       const riesgos = (datos.riesgos || []).filter((r) => RIESGOS[r]);
-      const t = { id: uid(), codigo: nuevoCodigo(), origen: 'externo', created_at: new Date().toISOString(), ...limpiarTrabajo({ ...datos, riesgos, estado: 'por_aprobar' }) };
-      demo.trabajos.push(t); return { id: t.id, codigo: t.codigo };
+      let g = null;
+      if (datos.grupo_codigo) {
+        g = demo.grupos.find((x) => x.activo && x.codigo === String(datos.grupo_codigo).trim().toUpperCase());
+        if (!g) throw new Error('El código de grupo no existe o está desactivado');
+      }
+      const t = { id: uid(), codigo: nuevoCodigo(), origen: 'externo', created_at: new Date().toISOString(), ...limpiarTrabajo({ ...datos, riesgos, estado: 'por_aprobar' }), grupo_id: g ? g.id : null };
+      demo.trabajos.push(t); return { id: t.id, codigo: t.codigo, grupo: g ? g.nombre : null };
+    },
+    async guardarGrupo(g) {
+      const datos = limpiarGrupo(g);
+      if (g.id) { const x = demo.grupos.find((y) => y.id === g.id); Object.assign(x, datos); return copia(x); }
+      const nuevo = { id: uid(), codigo: 'G-' + nuevoCodigo().slice(0, 8), created_at: new Date().toISOString(), ...datos };
+      demo.grupos.push(nuevo); return copia(nuevo);
+    },
+    async eliminarGrupo(id) {
+      demo.grupos = demo.grupos.filter((g) => g.id !== id);
+      demo.trabajos.forEach((t) => { if (t.grupo_id === id) t.grupo_id = null; });
+    },
+    async asignarGrupo(grupoId, agregar, quitar) {
+      demo.trabajos.forEach((t) => { if (agregar.includes(t.id)) t.grupo_id = grupoId; if (quitar.includes(t.id)) t.grupo_id = null; });
+    },
+    async infoGrupo(codigo) {
+      const g = demo.grupos.find((x) => x.activo && x.codigo === String(codigo).trim().toUpperCase());
+      return g ? copia({ nombre: g.nombre, codigo: g.codigo, contacto: g.contacto, correo: g.correo, telefono: g.telefono }) : null;
+    },
+    async consultarGrupo(codigo) {
+      const g = demo.grupos.find((x) => x.activo && x.codigo === String(codigo).trim().toUpperCase());
+      if (!g) return null;
+      return copia({
+        grupo: { nombre: g.nombre, codigo: g.codigo, contacto: g.contacto, correo: g.correo, telefono: g.telefono },
+        trabajos: demo.trabajos.filter((t) => t.grupo_id === g.id).map(({ observaciones, ...t }) => ({
+          ...t, documentos: demo.documentos.filter((d) => d.trabajo_id === t.id).map(({ requisito_id, estado }) => ({ requisito_id, estado }))
+        }))
+      });
     },
     async consultar(codigo) {
       const t = demo.trabajos.find((x) => x.codigo === String(codigo).trim().toUpperCase());
@@ -498,6 +574,57 @@
     el.className = `toast ${tipo}`; el.textContent = msg;
     $('#toast-root').appendChild(el);
     setTimeout(() => el.remove(), tipo === 'error' ? 6000 : 3200);
+  }
+
+  function avisoAccion(msg, textoBoton, fn, ms = 10000) {
+    const el = document.createElement('div');
+    el.className = 'toast ok con-accion';
+    const txt = document.createElement('span'); txt.textContent = msg;
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = textoBoton;
+    b.addEventListener('click', () => { el.remove(); fn(); });
+    el.append(txt, b);
+    $('#toast-root').appendChild(el);
+    setTimeout(() => el.remove(), ms);
+  }
+
+  function notificar(titulo, cuerpo, alClic) {
+    try {
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      const n = new Notification(titulo, { body: cuerpo, icon: (window.MARCA && window.MARCA.favicon) || undefined });
+      n.onclick = () => { window.focus(); n.close(); if (alClic) alClic(); };
+    } catch { /* algunos navegadores (p. ej. en celular) no permiten crear notificaciones así */ }
+  }
+
+  // Correo de aviso a SST con FormSubmit (servicio gratuito, sin servidor propio)
+  async function enviarAvisoCorreo(campos) {
+    const r = await fetch(`https://formsubmit.co/ajax/${CORREO_AVISOS}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ _template: 'table', _captcha: 'false', ...campos })
+    });
+    let j = {};
+    try { j = await r.json(); } catch { /* respuesta no JSON */ }
+    return j;
+  }
+
+  function avisarRegistroPorCorreo(o, reg) {
+    if (MODO_DEMO || S.sesion || !CORREO_AVISOS || !reg) return;
+    const horario = horarioCorto(o);
+    enviarAvisoCorreo({
+      _subject: `Nuevo trabajo registrado · ${o.titulo}`,
+      'Trabajo': o.titulo,
+      'Empresa o dependencia': o.empresa,
+      'Quién lo realiza': o.tipo_ejecutor === 'funcionario' ? 'Funcionarios de la universidad' : 'Empresa contratista',
+      'Responsable': o.responsable,
+      'Teléfono': o.telefono || '—',
+      'Correo': o.correo || '—',
+      'Lugar': o.lugar,
+      'Fechas': rangoTexto(o) + (horario ? ` (${horario})` : ''),
+      'Tareas de alto riesgo': (o.riesgos || []).map((r) => RIESGOS[r] && RIESGOS[r].nombre).filter(Boolean).join(', ') || 'Ninguna',
+      'Grupo': reg.grupo || 'Sin grupo',
+      'Código del trabajo': reg.codigo,
+      'Abrir en el calendario': `${urlBase()}?abrir=${encodeURIComponent(reg.codigo)}`
+    }).catch(() => { /* el aviso en vivo del calendario sigue funcionando */ });
   }
 
   let resolverConfirm = null;
@@ -613,6 +740,7 @@
     if (S.pestana === 'registrar') return renderRegistro();
     if (S.pestana === 'consultar') return renderConsulta();
     if (S.pestana === 'requisitos') return S.sesion ? renderRequisitos() : renderLogin();
+    if (S.pestana === 'grupos') return S.sesion ? renderGrupos() : renderLogin();
   }
 
   function cuentaMes(y, m) {
@@ -653,14 +781,19 @@
   function pintarSecciones() {
     const oscuro = document.documentElement.getAttribute('data-theme') === 'dark';
     const items = S.sesion
-      ? [['calendario', 'Calendario'], ['registrar', 'Registrar'], ['consultar', 'Consultar'], ['requisitos', 'Requisitos']]
+      ? [['calendario', 'Calendario'], ['registrar', 'Registrar'], ['consultar', 'Consultar'], ['grupos', 'Grupos'], ['requisitos', 'Requisitos']]
       : [['registrar', 'Registrar trabajo'], ['consultar', 'Consultar con código']];
     $('#secciones').innerHTML = items.map(([t, l]) => `<button data-acc="tab" data-tab="${t}" aria-current="${S.pestana === t}">${l}</button>`).join('')
       + '<span class="sep"></span>'
       + (S.sesion
-        ? `<span class="quien" title="${esc(S.usuario)}">${MODO_DEMO ? 'SST · demostración' : esc(S.usuario)}</span><button data-acc="salir">Salir</button>`
+        ? `${campana()}<span class="quien" title="${esc(S.usuario)}">${MODO_DEMO ? 'SST · demostración' : esc(S.usuario)}</span><button data-acc="salir">Salir</button>`
         : '<button data-acc="ingresar">Ingreso SST</button>')
       + `<button class="tema" data-acc="tema" title="Cambiar a modo ${oscuro ? 'claro' : 'oscuro'}" aria-label="Cambiar tema">${oscuro ? '☀️' : '🌙'}</button>`;
+  }
+
+  function campana() {
+    const n = S.trabajos.filter((t) => t.estado === 'por_aprobar').length;
+    return `<button class="campana" data-acc="avisos" title="${n ? plural(n, 'trabajo por aprobar', 'trabajos por aprobar') : 'Avisos de nuevos registros'}" aria-label="Avisos">🔔${n ? `<span class="badge">${n}</span>` : ''}</button>`;
   }
 
   function pintarSync() {
@@ -691,7 +824,9 @@
     const f = S.filtros;
     const txt = f.texto.trim().toLowerCase();
     return lista.filter((t) => {
-      if (txt && ![t.titulo, t.empresa, t.lugar, t.responsable, t.codigo, t.interventor].join(' ').toLowerCase().includes(txt)) return false;
+      if (txt && ![t.titulo, t.empresa, t.lugar, t.responsable, t.codigo, t.interventor, (grupoDe(t.grupo_id) || {}).nombre].join(' ').toLowerCase().includes(txt)) return false;
+      if (f.grupo === 'ninguno' && t.grupo_id) return false;
+      if (f.grupo && f.grupo !== 'ninguno' && t.grupo_id !== f.grupo) return false;
       if (f.riesgo === 'ninguno' && t.riesgos.length) return false;
       if (f.riesgo && f.riesgo !== 'ninguno' && !t.riesgos.includes(f.riesgo)) return false;
       if (f.ejecutor && t.tipo_ejecutor !== f.ejecutor) return false;
@@ -741,9 +876,10 @@
         <select class="entrada" id="f-riesgo">${opt('', 'Todos los riesgos', f.riesgo)}${Object.entries(RIESGOS).map(([k, r]) => opt(k, r.nombre, f.riesgo)).join('')}${opt('ninguno', 'Sin riesgo especial', f.riesgo)}</select>
         <select class="entrada" id="f-ejecutor">${opt('', 'Contratistas y funcionarios', f.ejecutor)}${opt('contratista', 'Solo contratistas', f.ejecutor)}${opt('funcionario', 'Solo funcionarios', f.ejecutor)}</select>
         <select class="entrada" id="f-estado">${opt('', 'Todos los estados', f.estado)}${Object.entries(ESTADOS).map(([k, v]) => opt(k, v, f.estado)).join('')}</select>
+        ${S.grupos.length ? `<select class="entrada" id="f-grupo">${opt('', 'Todos los grupos', f.grupo)}${opt('ninguno', 'Sin grupo', f.grupo)}${S.grupos.map((g) => opt(g.id, g.nombre, f.grupo)).join('')}</select>` : ''}
         ${lista ? `<label class="opcion" style="padding:7px 12px"><input type="checkbox" id="f-pendientes" ${f.pendientes ? 'checked' : ''}> Ocultar cerrados</label>
           <button class="btn" data-acc="csv">⬇ Excel (CSV)</button>` : ''}
-        ${(f.texto || f.riesgo || f.semaforo || f.ejecutor || f.estado) ? '<button class="btn fantasma" data-acc="limpiar-filtros">Limpiar filtros</button>' : ''}
+        ${(f.texto || f.riesgo || f.semaforo || f.ejecutor || f.estado || f.grupo) ? '<button class="btn fantasma" data-acc="limpiar-filtros">Limpiar filtros</button>' : ''}
       </div>
       <div class="layout ${S.sideOff ? 'side-off' : ''}" id="layout">
         <section id="cuerpo"></section>
@@ -878,7 +1014,7 @@
         return `<tr data-acc="detalle" data-id="${t.id}">
           <td><div class="fecha">${esc(rangoTexto(t))}</div><div class="sub">${esc(horarioCorto(t))}</div></td>
           <td><div class="tt">${esc(t.titulo)}</div><div class="sub">${esc(t.lugar)}</div></td>
-          <td><div>${esc(t.empresa)}</div><div class="sub">${t.tipo_ejecutor === 'funcionario' ? 'Funcionario' : 'Contratista'} · ${esc(t.responsable)}</div></td>
+          <td><div>${esc(t.empresa)}</div><div class="sub">${t.tipo_ejecutor === 'funcionario' ? 'Funcionario' : 'Contratista'} · ${esc(t.responsable)}${grupoDe(t.grupo_id) ? ` · 👥 ${esc(grupoDe(t.grupo_id).codigo)}` : ''}</div></td>
           <td>${t.riesgos.length ? `<div style="display:flex;gap:4px;flex-wrap:wrap">${t.riesgos.map(chipRiesgo).join('')}</div>` : '<span class="sub">Ninguno</span>'}</td>
           <td>${celdaNum(r.antes)}</td><td>${celdaNum(r.despues)}</td>
           <td>${chipEstado(t.estado)}${enCursoHoy(t) ? '<div style="margin-top:4px"><span class="chip-hoy">En curso hoy</span></div>' : ''}</td>
@@ -933,14 +1069,14 @@
 
   function descargarCSV() {
     const items = [...enRango(filtrar(S.trabajos))].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio));
-    const cols = ['Código', 'Trabajo', 'Tipo', 'Empresa / dependencia', 'Responsable', 'Teléfono', 'Correo', 'Área Uninorte', 'Correo funcionario Uninorte', 'Lugar', 'Fecha inicio', 'Fecha fin', 'Hora inicio', 'Hora fin', 'Riesgos', 'Estado', 'Documentos', 'Para iniciar recibidos', 'Para iniciar aprobados', 'Para iniciar total', 'Cierre recibidos', 'Cierre aprobados', 'Cierre total', 'Documentos faltantes'];
+    const cols = ['Código', 'Trabajo', 'Tipo', 'Empresa / dependencia', 'Grupo', 'Responsable', 'Teléfono', 'Correo', 'Área Uninorte', 'Correo funcionario Uninorte', 'Lugar', 'Fecha inicio', 'Fecha fin', 'Hora inicio', 'Hora fin', 'Riesgos', 'Estado', 'Documentos', 'Para iniciar recibidos', 'Para iniciar aprobados', 'Para iniciar total', 'Cierre recibidos', 'Cierre aprobados', 'Cierre total', 'Documentos faltantes'];
     const celda = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const filas = items.map((t) => {
       const r = resumenDocs(t);
       const faltantes = [...r.req.antes, ...(terminado(t) ? r.req.despues : [])]
         .filter((q) => { const d = docDe(t.id, q.id); return !d || d.estado === 'rechazado'; })
         .map((q) => q.nombre).join(' | ');
-      return [t.codigo, t.titulo, t.tipo_ejecutor === 'funcionario' ? 'Funcionario' : 'Contratista', t.empresa, t.responsable, t.telefono, t.correo, t.interventor, t.interventor_correo, t.lugar,
+      return [t.codigo, t.titulo, t.tipo_ejecutor === 'funcionario' ? 'Funcionario' : 'Contratista', t.empresa, (grupoDe(t.grupo_id) || {}).nombre || '', t.responsable, t.telefono, t.correo, t.interventor, t.interventor_correo, t.lugar,
         t.fecha_inicio, t.fecha_fin, hora(t.hora_inicio), hora(t.hora_fin), t.riesgos.map((x) => RIESGOS[x].nombre).join(', ') || 'Ninguno',
         ESTADOS[t.estado], SEMAFORO[semaforo(t, r)], r.antes.recibidos, r.antes.aprobados, r.antes.total, r.despues.recibidos, r.despues.aprobados, r.despues.total, faltantes].map(celda).join(';');
     });
@@ -979,9 +1115,11 @@
       ['Responsable', t.responsable], ['Teléfono', t.telefono || '—'], ['Correo', t.correo || '—'],
       ['Área Uninorte que lo pidió', t.interventor || '—'], ['Correo del funcionario Uninorte', t.interventor_correo || '—'], ['Lugar', t.lugar], ['Fechas', rangoTexto(t)],
       ['Horario', horarioCorto(t) || '—'], ['N.º de trabajadores', t.num_trabajadores || '—'],
-      ['Registrado por', t.origen === 'externo' ? 'El contratista / funcionario' : 'Equipo SST'], ['Código', t.codigo]
+      ['Registrado por', t.origen === 'externo' ? 'El contratista / funcionario' : 'Equipo SST'], ['Código', t.codigo],
+      ['Grupo', grupoDe(t.grupo_id) ? `${grupoDe(t.grupo_id).nombre} (${grupoDe(t.grupo_id).codigo})` : 'Sin grupo']
     ];
-    const chips = `${chipSem(s)}${chipEstado(t.estado)}${t.riesgos.map(chipRiesgo).join('')}`;
+    if (t.created_at) info.splice(info.length - 1, 0, ['Registrado el', fmtFechaHora(t.created_at)]);
+    const chips = `${chipSem(s)}${s === 'por_aprobar' ? '' : chipEstado(t.estado)}${t.riesgos.map(chipRiesgo).join('')}`;
     cont.innerHTML = `
       ${cabeceraBoard(esc(t.titulo), `${esc(t.empresa)} · ${esc(rangoTexto(t))}${horarioCorto(t) ? ' · ' + esc(horarioCorto(t)) : ''}`, chips)}
       <div class="board-body">
@@ -1073,13 +1211,22 @@
   /* ------------------------------------------------------------------
      Formulario de trabajo (SST y registro externo)
      ------------------------------------------------------------------ */
+  const AYUDA_GRUPO = 'Si el equipo SST le dio un código de grupo a tu empresa, escríbelo: este trabajo quedará en tu lista y verás todos tus trabajos con ese mismo código. Si no tienes, déjalo vacío.';
   const NOMBRES_CAMPO = { titulo: 'el trabajo a realizar', empresa: 'la empresa o dependencia', responsable: 'el responsable', telefono: 'el teléfono', correo: 'el correo', lugar: 'el lugar', fecha_inicio: 'la fecha de inicio', fecha_fin: 'la fecha de finalización' };
 
   function formTrabajo(t = {}, publico = false) {
     const v = (k) => esc(t[k] ?? '');
     const riesgos = t.riesgos || [];
     const tipo = t.tipo_ejecutor || 'contratista';
-    return `
+    const grupoPublico = publico ? `
+      <div class="panel grupo-reg">
+        <div class="grupo-reg-fila">
+          <label>Código de grupo <span class="ayuda">(opcional)</span><input name="grupo_codigo" maxlength="20" value="${v('grupo_codigo')}" placeholder="G-XXXXXXXX" autocomplete="off" spellcheck="false"></label>
+          <div class="grupo-estado" id="grupo-estado">${AYUDA_GRUPO}</div>
+        </div>
+      </div>` : '';
+    const grupoSST = !publico ? `<label>Grupo <span class="ayuda">(opcional)</span><select name="grupo_id"><option value="">Sin grupo</option>${S.grupos.filter((g) => g.activo || g.id === t.grupo_id).map((g) => `<option value="${g.id}" ${t.grupo_id === g.id ? 'selected' : ''}>${esc(g.nombre)} · ${esc(g.codigo)}</option>`).join('')}</select></label>` : '';
+    return `${grupoPublico}
       <div class="${publico ? 'panel' : 'caja'}">
         <h3 class="sec" style="margin:0 0 12px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--rojo)">Datos del trabajo</h3>
         <div class="rejilla">
@@ -1099,6 +1246,7 @@
           <label>Correo del funcionario Uninorte <span class="ayuda">(opcional, recibe copia de los avisos)</span><input name="interventor_correo" type="email" maxlength="200" value="${v('interventor_correo')}" placeholder="nombre@uninorte.edu.co"></label>
           <label>N.º de trabajadores<input name="num_trabajadores" type="number" min="1" max="500" value="${v('num_trabajadores')}"></label>
           <label>Lugar del trabajo <span class="req">*</span><input name="lugar" maxlength="200" value="${v('lugar')}" placeholder="Bloque, piso, área…"></label>
+          ${grupoSST}
         </div>
       </div>
       <div class="${publico ? 'panel' : 'caja'}">
@@ -1195,6 +1343,7 @@
           <p>El equipo de SST lo revisará y lo programará. Guarda este código para subir y consultar tus documentos:</p>
           <span class="codigo codigo-grande">${esc(S.registro.codigo)}</span>
           <p class="enlace-txt">${esc(enlace)}</p>
+          ${S.registro.grupo ? `<div class="aviso s-al_dia" style="margin:12px 0 0;text-align:left"><span class="txt">Quedó en la lista del grupo <strong>${esc(S.registro.grupo)}</strong>. Con el código <b>${esc(S.registro.grupoCodigo)}</b> ves todos tus trabajos.</span><button class="btn mini" data-acc="ver-mi-grupo">Ver mis trabajos</button></div>` : ''}
           <div class="btns" style="justify-content:center">
             <button class="btn" data-acc="copiar-enlace" data-codigo="${esc(S.registro.codigo)}">Copiar enlace</button>
             <button class="btn primary" data-acc="ir-consulta" data-codigo="${esc(S.registro.codigo)}">Subir documentos ahora</button>
@@ -1208,11 +1357,52 @@
         <div class="hero"><h1>Registrar <em>trabajo</em></h1>
           <p>Para contratistas y funcionarios que van a realizar trabajos en la universidad. Al enviar recibirás un código para subir los documentos de Seguridad y Salud en el Trabajo.</p></div>
         <form id="form-ext" novalidate>
-          ${formTrabajo({ fecha_inicio: '', fecha_fin: '' }, true)}
+          ${formTrabajo(baseRegistro(), true)}
           <div class="btns"><button class="btn primary" type="submit">Enviar registro</button></div>
         </form>
       </div>`;
-    pintarPrevia($('#form-ext'));
+    const form = $('#form-ext');
+    pintarPrevia(form);
+    S.grupoValido = '';
+    if (form.querySelector('[name="grupo_codigo"]').value) validarGrupoCampo(form, true);
+  }
+
+  // Datos con los que arranca el registro: el grupo elegido o el que recuerda este equipo
+  function baseRegistro() {
+    const g = S.grupoRegistro;
+    const codigo = g ? g.codigo : leerLS('sst-grupo', '');
+    return {
+      fecha_inicio: '', fecha_fin: '', grupo_codigo: codigo || '',
+      ...(g ? { empresa: g.nombre, responsable: g.contacto || '', telefono: g.telefono || '', correo: g.correo || '' } : {})
+    };
+  }
+
+  async function validarGrupoCampo(form, rellenar) {
+    const inp = form.querySelector('[name="grupo_codigo"]');
+    const est = $('#grupo-estado', form);
+    if (!inp || !est) return true;
+    const c = inp.value.trim().toUpperCase();
+    inp.value = c;
+    if (!c) { est.className = 'grupo-estado'; est.textContent = AYUDA_GRUPO; S.grupoValido = ''; return true; }
+    if (c === S.grupoValido) return true;
+    est.className = 'grupo-estado'; est.textContent = 'Buscando el grupo…';
+    let g = null;
+    try { g = await S.api.infoGrupo(c); } catch (e) { console.error(e); }
+    if (inp.value.trim().toUpperCase() !== c) return false;   // lo cambiaron mientras buscaba
+    if (!g) {
+      S.grupoValido = '';
+      est.className = 'grupo-estado mal';
+      est.textContent = '✗ No encontramos ese código de grupo. Revísalo con el equipo SST o déjalo vacío.';
+      return false;
+    }
+    S.grupoValido = c;
+    est.className = 'grupo-estado ok';
+    est.innerHTML = `✓ Grupo: <b>${esc(g.nombre)}</b><br>Este trabajo quedará en su lista.`;
+    if (rellenar) {
+      const poner = (n, val) => { const el = form.querySelector(`[name="${n}"]`); if (el && !el.value && val) el.value = val; };
+      poner('empresa', g.nombre); poner('responsable', g.contacto); poner('telefono', g.telefono); poner('correo', g.correo);
+    }
+    return true;
   }
 
   /* ------------------------------------------------------------------
@@ -1221,7 +1411,11 @@
   function renderConsulta() {
     const c = S.consulta;
     let detalle = '';
-    if (c === false) detalle = '<div class="empty" style="margin-top:16px"><span class="big">🔎</span><strong>No encontramos ese código</strong>Revisa que esté bien escrito: son 10 caracteres entre letras y números.</div>';
+    const G = S.grupoConsulta;
+    const volver = G && G.grupo ? `<button class="btn mini fantasma volver-grupo" data-acc="volver-grupo">← Volver a los trabajos de ${esc(G.grupo.nombre)}</button>` : '';
+    if (c === false) detalle = volver + '<div class="empty" style="margin-top:16px"><span class="big">🔎</span><strong>No encontramos ese código</strong>Revisa que esté bien escrito: el código de un trabajo tiene 10 caracteres entre letras y números, y el de un grupo empieza por G-.</div>';
+    else if (!c && G === false) detalle = '<div class="empty" style="margin-top:16px"><span class="big">🔎</span><strong>No encontramos ese grupo</strong>Revisa el código con el equipo de SST. Si el grupo fue desactivado, ya no muestra trabajos.</div>';
+    else if (!c && G && G.grupo) detalle = vistaGrupoPublico(G);
     if (c && c.trabajo) {
       const t = c.trabajo;
       const getDoc = (rid) => (c.documentos || []).find((d) => d.requisito_id === rid);
@@ -1229,7 +1423,7 @@
       const s = semaforo(t, res);
       const fin = terminado(t);
       const cerrado = ['cerrado', 'cancelado'].includes(t.estado);
-      detalle = `
+      detalle = `${volver}
         <div class="panel" style="margin-top:16px">
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${chipSem(s)}${s === 'por_aprobar' ? '' : chipEstado(t.estado)}${t.riesgos.map(chipRiesgo).join('')}</div>
           <h2 style="font-family:var(--f-display);font-weight:400;font-size:24px;text-transform:uppercase">${esc(t.titulo)}</h2>
@@ -1246,9 +1440,9 @@
     }
     $('#vista').innerHTML = `
       <div class="estrecho">
-        <div class="hero"><h1>Consultar <em>trabajo</em></h1><p>Escribe el código que recibiste al registrar el trabajo o que te envió el equipo de SST.</p></div>
+        <div class="hero"><h1>Consultar <em>trabajo</em></h1><p>Escribe el código que recibiste al registrar el trabajo. Si tu empresa tiene <b>código de grupo</b> (empieza por G-), escríbelo para ver todos tus trabajos juntos.</p></div>
         <form class="panel" id="form-consulta" style="display:flex;gap:10px;flex-wrap:wrap">
-          <input id="c-codigo" placeholder="Ej.: 3F9A1C0B7E" maxlength="20" value="${esc(S.codigoConsulta)}" style="flex:1;min-width:200px;text-transform:uppercase;font-family:var(--f-data);letter-spacing:2px;font-size:17px">
+          <input id="c-codigo" placeholder="Código del trabajo o del grupo" maxlength="20" value="${esc(S.codigoConsulta)}" style="flex:1;min-width:200px;text-transform:uppercase;font-family:var(--f-data);letter-spacing:2px;font-size:17px">
           <button class="btn primary" type="submit">Consultar</button>
         </form>
         ${detalle}
@@ -1256,10 +1450,244 @@
   }
 
   async function consultar(codigo) {
-    S.codigoConsulta = String(codigo || '').trim().toUpperCase();
-    if (!S.codigoConsulta) return;
-    const r = await S.api.consultar(S.codigoConsulta);
+    const c = String(codigo || '').trim().toUpperCase();
+    if (!c) return;
+    S.codigoConsulta = c;
+    if (esCodigoGrupo(c)) {
+      const r = await S.api.consultarGrupo(c);
+      S.consulta = null;
+      S.grupoConsulta = r && r.grupo ? r : false;
+      if (S.grupoConsulta) guardarLS('sst-grupo', c);
+      return;
+    }
+    const r = await S.api.consultar(c);
     S.consulta = r && r.trabajo ? r : false;
+  }
+
+  // Si este equipo recuerda un grupo, al entrar a Consultar se muestran sus trabajos
+  async function cargarGrupoRecordado() {
+    const g = leerLS('sst-grupo', '');
+    if (!g || S.consulta || S.grupoConsulta) return;
+    try {
+      await consultar(g);
+      if (S.grupoConsulta === false) { guardarLS('sst-grupo', ''); S.grupoConsulta = null; S.codigoConsulta = ''; }
+      if (S.pestana === 'consultar') renderConsulta();
+    } catch (e) { console.error(e); }
+  }
+
+  function vistaGrupoPublico(G) {
+    const items = (G.trabajos || []).map((t) => {
+      const getDoc = (rid) => (t.documentos || []).find((d) => d.requisito_id === rid);
+      const res = resumenDocs(t, getDoc);
+      return { t, res, s: semaforo(t, res) };
+    });
+    const cerradoT = (t) => ['cerrado', 'cancelado'].includes(t.estado);
+    const abiertos = items.filter((x) => !cerradoT(x.t))
+      .sort((a, b) => SEM_PRIORIDAD.indexOf(a.s) - SEM_PRIORIDAD.indexOf(b.s) || a.t.fecha_inicio.localeCompare(b.t.fecha_inicio));
+    const cerrados = items.filter((x) => cerradoT(x.t));
+    const pendientes = abiertos.filter((x) => ['faltan_previos', 'falta_cierre'].includes(x.s)).length;
+    const fila = ({ t, res, s }, j) => {
+      const fin = terminado(t);
+      const faltan = res.antes.faltan + res.antes.rechazados + (fin ? res.despues.faltan + res.despues.rechazados : 0);
+      return `<button class="card g-trabajo s-${s}" style="--j:${j}" data-acc="ir-consulta" data-codigo="${esc(t.codigo)}">
+        <div class="fila">${chipSem(s)}${s === 'por_aprobar' ? '' : chipEstado(t.estado)}${enCursoHoy(t) ? '<span class="chip-hoy">En curso hoy</span>' : ''}</div>
+        <h4>${esc(t.titulo)}</h4>
+        <div class="sub">${esc(t.lugar)} · ${esc(rangoTexto(t))}${horarioCorto(t) ? ' · ' + esc(horarioCorto(t)) : ''}</div>
+        ${t.riesgos.length ? `<div class="fila">${t.riesgos.map(chipRiesgo).join('')}</div>` : ''}
+        <div class="prog">${barraProg('Iniciar', res.antes)}${barraProg('Cierre', res.despues)}</div>
+        <div class="g-pie">${cerradoT(t) ? '<span>Trabajo cerrado</span>' : faltan ? `<b>${plural(faltan, 'documento pendiente', 'documentos pendientes')}</b>` : '<span class="ok">Documentos al día</span>'}<span class="ir">Ver y subir →</span></div>
+      </button>`;
+    };
+    return `
+      <div class="panel grupo-pub">
+        <div class="grupo-cab">
+          <div><span class="g-eyebrow">Trabajos del grupo</span>
+            <h2>${esc(G.grupo.nombre)}</h2>
+            <p class="sub">${plural(abiertos.length, 'trabajo abierto', 'trabajos abiertos')}${pendientes ? ` · <b>${plural(pendientes, 'con documentos pendientes', 'con documentos pendientes')}</b>` : ''}</p></div>
+          <span class="codigo">${esc(G.grupo.codigo)}</span>
+        </div>
+        <div class="codigo-caja" style="margin-top:12px">
+          <button class="btn mini primary" data-acc="registrar-con-grupo">+ Registrar un trabajo nuevo</button>
+          <button class="btn mini" data-acc="copiar-grupo" data-codigo="${esc(G.grupo.codigo)}">Copiar enlace del grupo</button>
+          <span style="flex:1"></span>
+          <button class="btn mini fantasma" data-acc="olvidar-grupo">Olvidar en este equipo</button>
+        </div>
+        <p class="ayuda" style="margin:10px 0 0">Este equipo recordará tu grupo para la próxima vez. Si usas un computador compartido, pulsa <b>Olvidar en este equipo</b> al terminar.</p>
+      </div>
+      ${abiertos.length ? `<div class="dia-vista" style="margin-top:16px">${abiertos.map(fila).join('')}</div>`
+        : '<div class="empty" style="margin-top:16px"><span class="big">📭</span><strong>No hay trabajos abiertos</strong>Cuando registres un trabajo con el código del grupo aparecerá aquí.</div>'}
+      ${cerrados.length ? `<details class="g-cerrados"><summary>Cerrados y cancelados (${cerrados.length})</summary><div class="dia-vista" style="margin-top:12px">${cerrados.map(fila).join('')}</div></details>` : ''}`;
+  }
+
+  /* ------------------------------------------------------------------
+     Grupos de contratistas (SST)
+     ------------------------------------------------------------------ */
+  const claveEmpresa = (txt) => String(txt || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ').split(' ')
+    .filter((w) => w.length > 2 && !['sas', 'ltda', 'del', 'los', 'las', 'cia', 'and'].includes(w)).join(' ');
+  function mismaEmpresa(a, b) {
+    const x = claveEmpresa(a), y = claveEmpresa(b);
+    return !!(x && y && (x.includes(y) || y.includes(x)));
+  }
+
+  function textoGrupo(g) {
+    return `Buen día${g.contacto ? ', ' + g.contacto : ''}:\n\nEl área de Seguridad y Salud en el Trabajo de la Universidad del Norte creó un código de grupo para ${g.nombre}:\n\n${g.codigo}\n\nCon este código puede:\n- Ver todos sus trabajos y los documentos pendientes en un solo lugar: ${enlaceGrupo(g.codigo)}\n- Registrar trabajos nuevos escribiendo el código en el formulario, para que queden en su lista.\n\nSi alguna vez registra un trabajo sin el código, también puede hacerlo; solo que no aparecerá en la lista del grupo.\n\nCordialmente,\nEquipo de Seguridad y Salud en el Trabajo\nUniversidad del Norte`;
+  }
+
+  function renderGrupos() {
+    const lista = [...S.grupos].sort((a, b) => (b.activo - a.activo) || a.nombre.localeCompare(b.nombre));
+    const tarjetaGrupo = (g, i) => {
+      const ts = S.trabajos.filter((t) => t.grupo_id === g.id);
+      const abiertos = ts.filter((t) => !['cerrado', 'cancelado'].includes(t.estado));
+      const atender = abiertos.filter((t) => ['faltan_previos', 'falta_cierre', 'por_aprobar'].includes(semaforo(t))).length;
+      const asunto = encodeURIComponent(`Código de grupo SST · ${g.nombre}`);
+      const cuerpo = encodeURIComponent(textoGrupo(g));
+      return `<div class="panel grupo-card ${g.activo ? '' : 'inactivo'}" style="animation-delay:${i * 50}ms">
+        <div class="grupo-cab">
+          <div><h3>${esc(g.nombre)}</h3>
+            <div class="sub">${[g.contacto, g.correo, g.telefono].filter(Boolean).map(esc).join(' · ') || 'Sin datos de contacto'}</div></div>
+          <span class="codigo">${esc(g.codigo)}</span>
+        </div>
+        <div class="grupo-stats">
+          <span><b>${ts.length}</b> ${ts.length === 1 ? 'trabajo' : 'trabajos'}</span>
+          <span><b>${abiertos.length}</b> ${abiertos.length === 1 ? 'abierto' : 'abiertos'}</span>
+          <span class="${atender ? 'mal' : ''}"><b>${atender}</b> por atender</span>
+          ${g.activo ? '' : '<span class="chip-e">Desactivado: el código no funciona</span>'}
+        </div>
+        <div class="codigo-caja">
+          <button class="btn mini" data-acc="copiar-grupo" data-codigo="${esc(g.codigo)}">Copiar enlace</button>
+          ${g.correo ? `<a class="btn mini" href="mailto:${esc(g.correo)}?subject=${asunto}&body=${cuerpo}">Enviar por correo</a>` : ''}
+          <a class="btn mini" target="_blank" rel="noopener" href="https://wa.me/?text=${cuerpo}">WhatsApp</a>
+          <button class="btn mini" data-acc="ver-grupo-cal" data-id="${g.id}">Ver sus trabajos</button>
+          <span style="flex:1"></span>
+          <button class="btn mini primary" data-acc="editar-grupo" data-id="${g.id}">Editar y asignar trabajos</button>
+        </div>
+      </div>`;
+    };
+    $('#vista').innerHTML = `
+      <div class="estrecho">
+        <div class="hero"><h1>Grupos de <em>contratistas</em></h1>
+          <p>Para las empresas o dependencias que hacen muchos trabajos. Cada grupo tiene un código: con él ven todos sus trabajos en <b>Consultar</b> sin escribir cada código, y lo que registren con él queda en su lista. Quien no tenga grupo sigue registrando normalmente.</p></div>
+        <div class="btns" style="justify-content:flex-start;margin:0 0 16px"><button class="btn primary" data-acc="nuevo-grupo">+ Nuevo grupo</button></div>
+        ${lista.length ? lista.map(tarjetaGrupo).join('')
+          : '<div class="empty"><span class="big">👥</span><strong>Todavía no hay grupos</strong>Crea uno para la empresa que más trabajos registra y envíale su código.</div>'}
+      </div>`;
+  }
+
+  function filaTrabajoGrupo(t, marcado, sugerido) {
+    return `<label class="opcion g-fila" data-texto="${esc([t.titulo, t.empresa, t.codigo, t.lugar].join(' ').toLowerCase())}" data-empresa="${esc(t.empresa)}">
+      <input type="checkbox" name="g_trabajos" value="${t.id}" ${marcado ? 'checked' : ''}>
+      <span class="g-fila-txt"><b>${esc(t.titulo)}</b><small>${esc(t.empresa)} · ${esc(rangoTexto(t))} · ${esc(ESTADOS[t.estado] || t.estado)}${sugerido ? ' · <em>misma empresa</em>' : ''}</small></span>
+      <span class="codigo g-cod">${esc(t.codigo)}</span>
+    </label>`;
+  }
+
+  function abrirFormGrupo(g) {
+    const editar = !!(g && g.id);
+    const v = g || { nombre: '', contacto: '', correo: '', telefono: '', notas: '', activo: true };
+    const candidatos = S.trabajos
+      .filter((t) => (editar && t.grupo_id === g.id) || (!t.grupo_id && t.estado !== 'cancelado'))
+      .map((t) => ({ t, m: editar && t.grupo_id === g.id, sug: editar && mismaEmpresa(t.empresa, g.nombre) }))
+      .sort((a, b) => (b.m - a.m) || (b.sug - a.sug) || b.t.fecha_inicio.localeCompare(a.t.fecha_inicio));
+    const miembros = candidatos.filter((x) => x.m).length;
+    S.formAbierto = true;
+    abrirBoard(`
+      ${cabeceraBoard(editar ? esc(g.nombre) : 'Nuevo grupo', editar ? `Código ${esc(g.codigo)} · ${plural(miembros, 'trabajo', 'trabajos')}` : 'Se generará un código que empieza por G- para enviárselo al contratista.')}
+      <form id="form-grupo" novalidate style="display:contents" data-id="${editar ? g.id : ''}">
+        <div class="board-body">
+          <div class="caja"><h3>Datos del grupo</h3><div class="rejilla">
+            <label class="ancho-total">Nombre del grupo <span class="req">*</span><input name="nombre" maxlength="200" value="${esc(v.nombre)}" placeholder="Ej.: Techos del Caribe S.A.S."></label>
+            <label>Persona de contacto<input name="contacto" maxlength="200" value="${esc(v.contacto || '')}"></label>
+            <label>Correo<input name="correo" type="email" maxlength="200" value="${esc(v.correo || '')}"></label>
+            <label>Teléfono<input name="telefono" maxlength="50" inputmode="tel" value="${esc(v.telefono || '')}"></label>
+            <label class="ancho-total">Notas internas<textarea name="notas" maxlength="1000" placeholder="Solo las ve el equipo SST">${esc(v.notas || '')}</textarea></label>
+          </div></div>
+          <div class="caja"><h3>Trabajos del grupo <span class="cnt" id="g-cuenta">${plural(miembros, 'marcado', 'marcados')}</span></h3>
+            <p class="ayuda" style="margin:0 0 10px">Marca los trabajos que ya existen y son de este grupo. Los que registren con el código se agregan solos.</p>
+            <div class="g-herr">
+              <input class="entrada" id="g-buscar" type="search" placeholder="Buscar por trabajo, empresa, lugar o código…">
+              <button type="button" class="btn mini" data-acc="g-marcar-empresa" title="Marca los trabajos cuya empresa coincide con el nombre del grupo">Marcar los de la misma empresa</button>
+            </div>
+            <div class="g-lista" id="g-lista">${candidatos.length ? candidatos.map((x) => filaTrabajoGrupo(x.t, x.m, x.sug)).join('') : '<p class="ayuda" style="margin:0">No hay trabajos sin grupo para asignar.</p>'}</div>
+          </div>
+          <div class="err" id="form-err" hidden></div>
+        </div>
+        <div class="board-foot">
+          ${editar ? `<button type="button" class="btn peligro" data-acc="eliminar-grupo">Eliminar</button><button type="button" class="btn fantasma" data-acc="toggle-grupo">${g.activo ? 'Desactivar' : 'Activar'}</button>` : ''}
+          <span class="sp"></span>
+          <button type="button" class="btn" data-acc="cerrar-board">Cancelar</button>
+          <button class="btn primary" type="submit">${editar ? 'Guardar cambios' : 'Crear grupo'}</button>
+        </div>
+      </form>`);
+  }
+
+  function contarMarcados() {
+    const el = $('#g-cuenta'); if (!el) return;
+    const n = $$('#g-lista input[name="g_trabajos"]:checked').length;
+    el.textContent = plural(n, 'marcado', 'marcados');
+  }
+
+  /* ------------------------------------------------------------------
+     Avisos de nuevos registros (SST)
+     ------------------------------------------------------------------ */
+  function abrirAvisos() {
+    const pend = S.trabajos.filter((t) => t.estado === 'por_aprobar')
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    const perm = !('Notification' in window) ? 'no' : Notification.permission;
+    const notiHTML = {
+      granted: '<div class="codigo-caja"><span class="chip-ok">✓ Activadas en este navegador</span><button class="btn mini" data-acc="probar-noti">Probar</button></div>',
+      denied: '<p class="ayuda" style="margin:0">Están <b>bloqueadas</b> en este navegador. Para activarlas pulsa el candado 🔒 junto a la dirección de la página → Notificaciones → Permitir, y recarga.</p>',
+      no: '<p class="ayuda" style="margin:0">Este navegador no permite notificaciones. Igual verás el aviso dentro de la página.</p>',
+      default: '<button class="btn mini primary" data-acc="activar-noti">Activar notificaciones</button>'
+    }[perm] || '';
+    abrirBoard(`
+      ${cabeceraBoard('Avisos', 'Trabajos que registraron contratistas y funcionarios, y cómo te enteras de los nuevos')}
+      <div class="board-body">
+        <div class="caja"><h3>Por aprobar <span class="cnt">${pend.length}</span></h3>
+          ${pend.length ? `<div class="av-lista">${pend.map((t) => `<button class="av-item" data-acc="detalle" data-id="${t.id}">
+              <b>${esc(t.titulo)}</b>
+              <span>${esc(t.empresa)}${grupoDe(t.grupo_id) && !mismaEmpresa(t.empresa, grupoDe(t.grupo_id).nombre) ? ' · 👥 ' + esc(grupoDe(t.grupo_id).nombre) : ''} · ${esc(rangoTexto(t))}</span>
+              ${t.created_at ? `<small>Registrado el ${esc(fmtFechaHora(t.created_at))}</small>` : ''}</button>`).join('')}</div>`
+            : '<p class="ayuda" style="margin:0">🎉 No hay trabajos esperando aprobación.</p>'}
+        </div>
+        <div class="caja"><h3>Aviso en este navegador</h3>
+          <p class="ayuda" style="margin:0 0 10px">Mientras tengas el calendario abierto, aunque estés en otra pestaña o programa, te sale una notificación cuando alguien registra un trabajo. Dentro de la página también aparece un aviso con el botón <b>Ver</b>.</p>
+          ${notiHTML}
+        </div>
+        <div class="caja"><h3>Aviso por correo</h3>
+          <p class="ayuda" style="margin:0 0 10px">Cada vez que alguien registra un trabajo llega un correo a <b>${esc(CORREO_AVISOS || '—')}</b> con los datos y un enlace para abrirlo aquí. Se envía con el servicio gratuito FormSubmit.</p>
+          <p class="ayuda" style="margin:0 0 10px"><b>Solo la primera vez:</b> pulsa <b>Enviar correo de prueba</b>, abre el correo de FormSubmit que te llega y pulsa <b>Activate Form</b>. Si no lo ves en unos minutos, revisa el correo no deseado.</p>
+          <button class="btn mini primary" data-acc="probar-correo">Enviar correo de prueba</button>
+        </div>
+      </div>`);
+  }
+
+  function avisarNuevos(lista) {
+    lista.forEach((t) => {
+      avisoAccion(`🔔 Nuevo trabajo registrado: ${t.titulo} · ${t.empresa}`, 'Ver', () => abrirDetalle(t.id), 15000);
+      notificar('Nuevo trabajo registrado', `${t.titulo} · ${t.empresa} · ${rangoTexto(t)}`, () => abrirDetalle(t.id));
+    });
+    if (lista.length) guardarLS('sst-ultima-visita', new Date().toISOString());
+  }
+
+  // Al entrar: ¿cuántos trabajos se registraron desde la última visita?
+  function resumenNuevos() {
+    const ultima = leerLS('sst-ultima-visita', '');
+    guardarLS('sst-ultima-visita', new Date().toISOString());
+    if (!ultima) return;
+    const desde = new Date(ultima);
+    const nuevos = S.trabajos.filter((t) => t.origen === 'externo' && t.created_at && new Date(t.created_at) > desde);
+    if (!nuevos.length) return;
+    const msg = nuevos.length === 1 ? `🔔 Se registró 1 trabajo nuevo desde tu última visita: ${nuevos[0].titulo}` : `🔔 Se registraron ${nuevos.length} trabajos nuevos desde tu última visita`;
+    setTimeout(() => avisoAccion(msg, 'Ver', () => (nuevos.length === 1 ? abrirDetalle(nuevos[0].id) : abrirAvisos()), 15000), 700);
+  }
+
+  function abrirPendiente() {
+    const c = S.abrirTras; S.abrirTras = '';
+    if (!c) return;
+    try { history.replaceState(null, '', location.pathname); } catch { /* visor */ }
+    const t = S.trabajos.find((x) => x.codigo === c);
+    if (t) abrirDetalle(t.id); else aviso('No se encontró el trabajo del enlace. Puede que lo hayan eliminado.', 'error');
   }
 
   /* ------------------------------------------------------------------
@@ -1315,9 +1743,13 @@
   }
 
   async function refrescarTodo(desdeVivo = false) {
+    const antes = new Set(S.trabajos.map((t) => t.id));
     await recargar();
+    if (desdeVivo) avisarNuevos(S.trabajos.filter((t) => !antes.has(t.id) && t.origen === 'externo'));
+    pintarSecciones();
     if (S.pestana === 'calendario' && $('#cuerpo')) pintarCuerpo();
     else if (S.pestana === 'requisitos' && !S.formAbierto) renderRequisitos();
+    else if (S.pestana === 'grupos' && !S.formAbierto) renderGrupos();
     if (S.detalleId && !S.formAbierto) {
       const enfoque = document.activeElement;
       if (!(desdeVivo && enfoque && enfoque.closest && enfoque.closest('#board-root') && /INPUT|TEXTAREA|SELECT/.test(enfoque.tagName))) pintarDetalle();
@@ -1336,6 +1768,12 @@
     else S.fecha = sumarDias(S.fecha, dir);
     S.miniMes = null; S.dir = dir;
     pintarCuerpo();
+  }
+
+  async function copiarEnlaceGrupo(codigo) {
+    const url = enlaceGrupo(codigo);
+    try { await navigator.clipboard.writeText(url); aviso(S.sesion ? 'Enlace del grupo copiado. Envíaselo al contratista.' : 'Enlace del grupo copiado.', 'ok'); }
+    catch { aviso(url); }
   }
 
   async function copiarEnlace(codigo) {
@@ -1408,6 +1846,7 @@
     S.menuAnio = false;
     try { history.replaceState(null, '', location.pathname); } catch { /* visor sin historial */ }
     cerrarBoard(); render(); window.scrollTo({ top: 0 });
+    if (pestana === 'consultar') cargarGrupoRecordado();
   }
 
   document.addEventListener('click', async (e) => {
@@ -1458,7 +1897,7 @@
       }
       case 'mini-mes': S.miniMes = sumarMeses(S.miniMes || S.fecha.slice(0, 7) + '-01', Number(el.dataset.n)); pintarSide(); break;
       case 'chip-sem': S.filtros.semaforo = S.filtros.semaforo === el.dataset.s ? '' : el.dataset.s; renderCalendario(); break;
-      case 'limpiar-filtros': Object.assign(S.filtros, { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '' }); renderCalendario(); break;
+      case 'limpiar-filtros': Object.assign(S.filtros, { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', grupo: '' }); renderCalendario(); break;
       case 'csv': descargarCSV(); break;
       case 'detalle': abrirDetalle(el.dataset.id); break;
       case 'cerrar-board': cerrarBoard(); break;
@@ -1511,6 +1950,73 @@
         await conCarga(el, async () => { await S.api.guardarRequisito({ ...q, activo: !q.activo }); await refrescarTodo(); });
         break;
       }
+      case 'avisos': abrirAvisos(); break;
+      case 'activar-noti':
+        if (!('Notification' in window)) { aviso('Este navegador no permite notificaciones.', 'error'); break; }
+        try { await Notification.requestPermission(); } catch { /* sin permiso */ }
+        abrirAvisos();
+        if (Notification.permission === 'granted') { aviso('Notificaciones activadas en este navegador.', 'ok'); notificar('Avisos activados', 'Así te avisaremos cuando alguien registre un trabajo.'); }
+        break;
+      case 'probar-noti': notificar('Nuevo trabajo registrado', 'Ejemplo · así se verá el aviso'); aviso('Se envió una notificación de prueba.', 'ok'); break;
+      case 'probar-correo':
+        if (MODO_DEMO) { aviso('En la demostración no se envían correos.'); break; }
+        await conCarga(el, async () => {
+          const j = await enviarAvisoCorreo({ _subject: 'Prueba · Avisos del Calendario de Trabajos SST', 'Mensaje': 'Si recibes este correo, los avisos de nuevos registros ya están funcionando.', 'Página': urlBase() });
+          if (String(j.success) === 'true') aviso('Correo de prueba enviado. Revisa tu bandeja de entrada.', 'ok');
+          else if (/activ/i.test(j.message || '')) aviso('Te llegó un correo de FormSubmit para activar los avisos: ábrelo y pulsa "Activate Form".', 'ok');
+          else throw new Error(j.message || 'No se pudo enviar el correo de prueba. Intenta de nuevo en unos minutos.');
+        });
+        break;
+      case 'nuevo-grupo': abrirFormGrupo(null); break;
+      case 'editar-grupo': abrirFormGrupo(grupoDe(el.dataset.id)); break;
+      case 'copiar-grupo': copiarEnlaceGrupo(el.dataset.codigo); break;
+      case 'ver-grupo-cal':
+        Object.assign(S.filtros, { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', grupo: el.dataset.id, pendientes: false });
+        S.vista = 'lista'; irA('calendario'); break;
+      case 'g-marcar-empresa': {
+        const form = $('#form-grupo'); const nombre = form.querySelector('[name="nombre"]').value.trim();
+        if (!nombre) { aviso('Primero escribe el nombre del grupo.', 'error'); break; }
+        let n = 0;
+        $$('#g-lista .g-fila').forEach((f) => { const cb = $('input', f); if (!cb.checked && mismaEmpresa(f.dataset.empresa, nombre)) { cb.checked = true; n++; } });
+        contarMarcados();
+        aviso(n ? (n === 1 ? 'Se marcó 1 trabajo de la misma empresa.' : `Se marcaron ${n} trabajos de la misma empresa.`) : 'No hay más trabajos con una empresa parecida al nombre del grupo.', n ? 'ok' : '');
+        break;
+      }
+      case 'toggle-grupo': {
+        const g = grupoDe($('#form-grupo').dataset.id);
+        await conCarga(el, async () => {
+          await S.api.guardarGrupo({ ...g, activo: !g.activo });
+          S.formAbierto = false; cerrarBoard(); await refrescarTodo();
+          aviso(g.activo ? 'Grupo desactivado: su código ya no funciona.' : 'Grupo activado.', 'ok');
+        });
+        break;
+      }
+      case 'eliminar-grupo': {
+        const g = grupoDe($('#form-grupo').dataset.id);
+        const ok = await confirmar('Eliminar grupo', `Se eliminará el grupo “${g.nombre}”. Sus trabajos NO se borran: quedan sin grupo. El código dejará de funcionar.`, 'Eliminar');
+        if (!ok) break;
+        await conCarga(null, async () => { await S.api.eliminarGrupo(g.id); S.formAbierto = false; cerrarBoard(); await refrescarTodo(); aviso('Grupo eliminado.', 'ok'); });
+        break;
+      }
+      case 'volver-grupo':
+        S.consulta = null;
+        await conCarga(el, async () => { await consultar(S.grupoConsulta.grupo.codigo); });
+        renderConsulta(); window.scrollTo({ top: 0 }); break;
+      case 'olvidar-grupo':
+        guardarLS('sst-grupo', ''); S.grupoConsulta = null; S.consulta = null; S.codigoConsulta = '';
+        renderConsulta(); aviso('Listo, este equipo ya no recuerda el grupo.', 'ok'); break;
+      case 'registrar-con-grupo': {
+        S.grupoRegistro = (S.grupoConsulta && S.grupoConsulta.grupo) || null;
+        irA('registrar');
+        S.grupoRegistro = null;
+        break;
+      }
+      case 'ver-mi-grupo': {
+        const c = S.registro && S.registro.grupoCodigo;
+        S.pestana = 'consultar'; S.consulta = null;
+        await conCarga(el, async () => { await consultar(c); });
+        render(); window.scrollTo({ top: 0 }); break;
+      }
       case 'confirm-si': cerrarConfirm(true); break;
       case 'confirm-no': cerrarConfirm(false); break;
     }
@@ -1527,6 +2033,7 @@
         await recargar();
         if (S.api.suscribir) S.api.suscribir(alCambiarEnVivo);
         S.pestana = 'calendario'; render(); aviso('¡Hola! Bienvenido al calendario.', 'ok');
+        if (S.abrirTras) abrirPendiente(); else resumenNuevos();
       });
     }
 
@@ -1536,10 +2043,20 @@
       const err = validarTrabajo(o, publico);
       mostrarErrores(form, err);
       if (err) return;
+      if (publico && o.grupo_codigo) {
+        o.grupo_codigo = o.grupo_codigo.toUpperCase();
+        if (!(await validarGrupoCampo(form, false))) {
+          mostrarErrores(form, { msg: 'El código de grupo no es válido. Revísalo o déjalo vacío para registrar sin grupo.', campos: ['grupo_codigo'] });
+          return;
+        }
+      }
       await conCarga(boton, async () => {
         if (publico) {
-          S.registro = await S.api.registrarExterno(o);
-          if (S.sesion) await recargar();
+          const reg = await S.api.registrarExterno(o);
+          S.registro = { ...reg, grupoCodigo: reg && reg.grupo ? o.grupo_codigo : '' };
+          if (reg && reg.grupo) { guardarLS('sst-grupo', o.grupo_codigo); S.grupoConsulta = null; }
+          avisarRegistroPorCorreo(o, reg);
+          if (S.sesion) { await recargar(); pintarSecciones(); }
           renderRegistro(); window.scrollTo({ top: 0, behavior: 'smooth' });
         } else {
           const id = form.dataset.id || null;
@@ -1558,6 +2075,26 @@
       if (S.consulta && S.consulta.trabajo) { try { history.replaceState(null, '', `?codigo=${encodeURIComponent(S.codigoConsulta)}`); } catch { /* visor */ } }
     }
 
+    if (form.id === 'form-grupo') {
+      const o = leerForm(form);
+      if (!o.nombre) { mostrarErrores(form, { msg: 'Escribe el nombre del grupo.', campos: ['nombre'] }); return; }
+      if (o.correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.correo)) { mostrarErrores(form, { msg: 'El correo no parece válido.', campos: ['correo'] }); return; }
+      mostrarErrores(form, null);
+      const marcados = new Set(new FormData(form).getAll('g_trabajos'));
+      const id = form.dataset.id || null;
+      const previo = id ? grupoDe(id) : null;
+      await conCarga(boton, async () => {
+        const g = await S.api.guardarGrupo({ ...o, id, activo: previo ? previo.activo : true });
+        const actuales = S.trabajos.filter((t) => t.grupo_id === g.id).map((t) => t.id);
+        const agregar = [...marcados].filter((x) => !actuales.includes(x));
+        const quitar = actuales.filter((x) => !marcados.has(x));
+        if (agregar.length || quitar.length) await S.api.asignarGrupo(g.id, agregar, quitar);
+        S.formAbierto = false; cerrarBoard(); await refrescarTodo();
+        if (id) aviso('Grupo actualizado.', 'ok');
+        else avisoAccion(`Grupo creado. Su código es ${g.codigo}`, 'Copiar enlace', () => copiarEnlaceGrupo(g.codigo), 12000);
+      });
+    }
+
     if (form.id === 'form-req') {
       const o = leerForm(form);
       if (!o.nombre) { mostrarErrores(form, { msg: 'Escribe el nombre del documento.', campos: ['nombre'] }); return; }
@@ -1571,13 +2108,15 @@
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (t.id === 'archivo-oculto') { procesarArchivo(t.files[0]); return; }
+    if (t.name === 'g_trabajos') { contarMarcados(); return; }
     const form = t.closest('#form-sst, #form-ext');
+    if (form && t.name === 'grupo_codigo') { validarGrupoCampo(form, true); return; }
     if (form && (t.name === 'riesgos' || t.name === 'tipo_ejecutor')) pintarPrevia(form);
     if (form && t.name === 'fecha_inicio') {
       const fin = form.querySelector('[name="fecha_fin"]');
       if (!fin.value || fin.value < t.value) fin.value = t.value;
     }
-    const mapa = { 'f-riesgo': 'riesgo', 'f-ejecutor': 'ejecutor', 'f-estado': 'estado' };
+    const mapa = { 'f-riesgo': 'riesgo', 'f-ejecutor': 'ejecutor', 'f-estado': 'estado', 'f-grupo': 'grupo' };
     if (mapa[t.id]) { S.filtros[mapa[t.id]] = t.value; renderCalendario(); }
     if (t.id === 'f-pendientes') { S.filtros.pendientes = t.checked; pintarCuerpo(); }
   });
@@ -1587,10 +2126,19 @@
       const v = e.target.value;
       setTimeout(() => { if ($('#f-texto') && $('#f-texto').value === v) { S.filtros.texto = v; pintarCuerpo(); } }, 160);
     }
+    if (e.target.id === 'g-buscar') {
+      const q = e.target.value.trim().toLowerCase();
+      $$('#g-lista .g-fila').forEach((f) => { f.hidden = !!q && !f.dataset.texto.includes(q); });
+    }
+    if (e.target.name === 'grupo_codigo') {
+      const est = $('#grupo-estado');
+      if (est && e.target.value.trim().toUpperCase() !== S.grupoValido) { est.className = 'grupo-estado'; est.textContent = AYUDA_GRUPO; }
+    }
     if (e.target.classList && e.target.classList.contains('miss')) e.target.classList.remove('miss');
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.id === 'g-buscar') { e.preventDefault(); return; }
     if (e.key === 'Escape') {
       if ($('#confirm-root').innerHTML) return cerrarConfirm(false);
       if (S.menuAnio) { S.menuAnio = false; pintarRail(); return; }
@@ -1619,7 +2167,10 @@
         await recargar();
         if (S.api.suscribir) S.api.suscribir(alCambiarEnVivo);
       } else await S.api.cargarRequisitosPublicos();
-      if (params.get('codigo')) { S.pestana = 'consultar'; await consultar(params.get('codigo')); }
+      S.abrirTras = String(params.get('abrir') || '').trim().toUpperCase();
+      if (S.abrirTras) S.pestana = 'calendario';
+      else if (params.get('grupo')) { S.pestana = 'consultar'; await consultar(params.get('grupo')); }
+      else if (params.get('codigo')) { S.pestana = 'consultar'; await consultar(params.get('codigo')); }
       else S.pestana = S.sesion ? 'calendario' : 'registrar';
     } catch (e) {
       console.error(e);
@@ -1630,6 +2181,8 @@
     }
     S.cargando = false;
     render();
+    if (S.sesion) { if (S.abrirTras) abrirPendiente(); else resumenNuevos(); }
+    else if (S.abrirTras) aviso('Ingresa con la cuenta del equipo SST para ver el trabajo.');
   }
 
   window.SSTApp = { S, docDe, resumenDocs, terminado, rangoTexto, horarioCorto, enlaceContratista, esc, aviso };
