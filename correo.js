@@ -69,17 +69,18 @@
         <p class="ayuda">Este trabajo no tiene correo registrado. Agrégalo con <b>Editar datos</b> para poder enviarle el estado de sus documentos.</p></div>`;
     }
     const m = mensaje(t);
+    const cc = t.interventor_correo ? encodeURIComponent(t.interventor_correo) : '';
     const para = encodeURIComponent(t.correo);
     const asunto = encodeURIComponent(m.asunto);
     const cuerpo = encodeURIComponent(m.cuerpo);
     return `<div class="caja correo-caja">
       <h3>Notificar al contratista <span class="correo-estado ${m.ok ? 'ok' : 'pend'}">${m.ok ? 'Todo aprobado' : (m.pendientes === 1 ? '1 pendiente' : m.pendientes + ' pendientes')}</span></h3>
-      <p class="ayuda">Se prepara un correo para <b>${esc(t.correo)}</b> con ${m.ok ? 'la confirmación de que todos los documentos están aprobados' : 'los documentos que faltan, los rechazados y su motivo'}. Ábrelo, revísalo y pulsa <b>Enviar</b>.</p>
+      <p class="ayuda">Se prepara un correo para <b>${esc(t.correo)}</b>${t.interventor_correo ? `, con copia a <b>${esc(t.interventor_correo)}</b>,` : ''} con ${m.ok ? 'la confirmación de que todos los documentos están aprobados' : 'los documentos que faltan, los rechazados y su motivo'}. Ábrelo, revísalo y pulsa <b>Enviar</b>.</p>
       <details><summary>Ver el mensaje</summary><pre class="correo-previa">${esc('Asunto: ' + m.asunto + '\n\n' + m.cuerpo)}</pre></details>
       <div class="codigo-caja">
-        <a class="btn mini primary" target="_blank" rel="noopener" href="https://outlook.office.com/mail/deeplink/compose?to=${para}&subject=${asunto}&body=${cuerpo}">Abrir en Outlook</a>
-        <a class="btn mini" target="_blank" rel="noopener" href="https://mail.google.com/mail/?view=cm&fs=1&to=${para}&su=${asunto}&body=${cuerpo}">Abrir en Gmail</a>
-        <a class="btn mini" href="mailto:${esc(t.correo)}?subject=${asunto}&body=${cuerpo}">Programa de correo</a>
+        <a class="btn mini primary" target="_blank" rel="noopener" href="https://outlook.office.com/mail/deeplink/compose?to=${para}${cc ? '&cc=' + cc : ''}&subject=${asunto}&body=${cuerpo}">Abrir en Outlook</a>
+        <a class="btn mini" target="_blank" rel="noopener" href="https://mail.google.com/mail/?view=cm&fs=1&to=${para}${cc ? '&cc=' + cc : ''}&su=${asunto}&body=${cuerpo}">Abrir en Gmail</a>
+        <a class="btn mini" href="mailto:${esc(t.correo)}?${cc ? 'cc=' + cc + '&' : ''}subject=${asunto}&body=${cuerpo}">Programa de correo</a>
         <button class="btn mini" data-acc="copiar-correo" data-id="${esc(t.id)}">Copiar mensaje</button>
       </div>
     </div>`;
@@ -92,7 +93,7 @@
     if (!t) return;
     const m = mensaje(t);
     try {
-      await navigator.clipboard.writeText(`Para: ${t.correo}\nAsunto: ${m.asunto}\n\n${m.cuerpo}`);
+      await navigator.clipboard.writeText(`Para: ${t.correo}${t.interventor_correo ? '\nCC: ' + t.interventor_correo : ''}\nAsunto: ${m.asunto}\n\n${m.cuerpo}`);
       A().aviso('Mensaje copiado. Pégalo en tu correo.', 'ok');
     } catch {
       A().aviso('No se pudo copiar. Usa "Ver el mensaje" y cópialo a mano.', 'error');
