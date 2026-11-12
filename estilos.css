@@ -581,3 +581,4 @@ textarea { resize: vertical; min-height: 74px; line-height: 1.4; }
 /* Etiquetas: el asterisco de obligatorio queda junto al texto */
 label:not(.opcion) { display: block; }
 label:not(.opcion) > input, label:not(.opcion) > select, label:not(.opcion) > textarea { display: block; margin-top: 5px; }
+.etq { display: block; margin-bottom: 5px; }
