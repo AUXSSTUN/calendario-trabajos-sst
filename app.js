@@ -296,7 +296,7 @@
       tipo_ejecutor: t.tipo_ejecutor === 'funcionario' ? 'funcionario' : 'contratista',
       empresa: t.empresa, responsable: t.responsable,
       telefono: vacioANull(t.telefono), correo: vacioANull(t.correo),
-      interventor: vacioANull(t.interventor),
+      interventor: vacioANull(t.interventor), interventor_correo: vacioANull(t.interventor_correo),
       num_trabajadores: t.num_trabajadores ? Number(t.num_trabajadores) : null,
       lugar: t.lugar, fecha_inicio: t.fecha_inicio, fecha_fin: t.fecha_fin,
       hora_inicio: vacioANull(t.hora_inicio), hora_fin: vacioANull(t.hora_fin),
@@ -933,14 +933,14 @@
 
   function descargarCSV() {
     const items = [...enRango(filtrar(S.trabajos))].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio));
-    const cols = ['Código', 'Trabajo', 'Tipo', 'Empresa / dependencia', 'Responsable', 'Teléfono', 'Correo', 'Área Uninorte', 'Lugar', 'Fecha inicio', 'Fecha fin', 'Hora inicio', 'Hora fin', 'Riesgos', 'Estado', 'Documentos', 'Para iniciar recibidos', 'Para iniciar aprobados', 'Para iniciar total', 'Cierre recibidos', 'Cierre aprobados', 'Cierre total', 'Documentos faltantes'];
+    const cols = ['Código', 'Trabajo', 'Tipo', 'Empresa / dependencia', 'Responsable', 'Teléfono', 'Correo', 'Área Uninorte', 'Correo funcionario Uninorte', 'Lugar', 'Fecha inicio', 'Fecha fin', 'Hora inicio', 'Hora fin', 'Riesgos', 'Estado', 'Documentos', 'Para iniciar recibidos', 'Para iniciar aprobados', 'Para iniciar total', 'Cierre recibidos', 'Cierre aprobados', 'Cierre total', 'Documentos faltantes'];
     const celda = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const filas = items.map((t) => {
       const r = resumenDocs(t);
       const faltantes = [...r.req.antes, ...(terminado(t) ? r.req.despues : [])]
         .filter((q) => { const d = docDe(t.id, q.id); return !d || d.estado === 'rechazado'; })
         .map((q) => q.nombre).join(' | ');
-      return [t.codigo, t.titulo, t.tipo_ejecutor === 'funcionario' ? 'Funcionario' : 'Contratista', t.empresa, t.responsable, t.telefono, t.correo, t.interventor, t.lugar,
+      return [t.codigo, t.titulo, t.tipo_ejecutor === 'funcionario' ? 'Funcionario' : 'Contratista', t.empresa, t.responsable, t.telefono, t.correo, t.interventor, t.interventor_correo, t.lugar,
         t.fecha_inicio, t.fecha_fin, hora(t.hora_inicio), hora(t.hora_fin), t.riesgos.map((x) => RIESGOS[x].nombre).join(', ') || 'Ninguno',
         ESTADOS[t.estado], SEMAFORO[semaforo(t, r)], r.antes.recibidos, r.antes.aprobados, r.antes.total, r.despues.recibidos, r.despues.aprobados, r.despues.total, faltantes].map(celda).join(';');
     });
@@ -977,7 +977,7 @@
     const info = [
       ['Empresa / dependencia', t.empresa], ['Tipo', t.tipo_ejecutor === 'funcionario' ? 'Funcionario Uninorte' : 'Contratista'],
       ['Responsable', t.responsable], ['Teléfono', t.telefono || '—'], ['Correo', t.correo || '—'],
-      ['Área Uninorte que lo pidió', t.interventor || '—'], ['Lugar', t.lugar], ['Fechas', rangoTexto(t)],
+      ['Área Uninorte que lo pidió', t.interventor || '—'], ['Correo del funcionario Uninorte', t.interventor_correo || '—'], ['Lugar', t.lugar], ['Fechas', rangoTexto(t)],
       ['Horario', horarioCorto(t) || '—'], ['N.º de trabajadores', t.num_trabajadores || '—'],
       ['Registrado por', t.origen === 'externo' ? 'El contratista / funcionario' : 'Equipo SST'], ['Código', t.codigo]
     ];
@@ -1001,7 +1001,7 @@
           <div class="codigo-caja">
             <span class="codigo">${esc(t.codigo)}</span><span style="flex:1"></span>
             <button class="btn mini" data-acc="copiar-enlace" data-codigo="${esc(t.codigo)}">Copiar enlace</button>
-            ${t.correo ? `<a class="btn mini" href="mailto:${esc(t.correo)}?subject=${asunto}&body=${cuerpoMsg}">Enviar por correo</a>` : ''}
+            ${t.correo ? `<a class="btn mini" href="mailto:${esc(t.correo)}?${t.interventor_correo ? 'cc=' + encodeURIComponent(t.interventor_correo) + '&' : ''}subject=${asunto}&body=${cuerpoMsg}">Enviar por correo</a>` : ''}
             <a class="btn mini" target="_blank" rel="noopener" href="https://wa.me/?text=${cuerpoMsg}">WhatsApp</a>
             <span class="enlace-txt">${esc(enlace)}</span>
           </div>
@@ -1096,8 +1096,9 @@
           <label>Teléfono ${publico ? '<span class="req">*</span>' : ''}<input name="telefono" maxlength="50" value="${v('telefono')}" inputmode="tel"></label>
           <label>Correo ${publico ? '<span class="req">*</span>' : ''}<input name="correo" type="email" maxlength="200" value="${v('correo')}"></label>
           <label>Área o funcionario Uninorte que lo pide<input name="interventor" maxlength="200" value="${v('interventor')}" placeholder="Ej.: Planta Física"></label>
+          <label>Correo del funcionario Uninorte <span class="ayuda">(opcional, recibe copia de los avisos)</span><input name="interventor_correo" type="email" maxlength="200" value="${v('interventor_correo')}" placeholder="nombre@uninorte.edu.co"></label>
           <label>N.º de trabajadores<input name="num_trabajadores" type="number" min="1" max="500" value="${v('num_trabajadores')}"></label>
-          <label class="ancho-total">Lugar del trabajo <span class="req">*</span><input name="lugar" maxlength="200" value="${v('lugar')}" placeholder="Bloque, piso, área…"></label>
+          <label>Lugar del trabajo <span class="req">*</span><input name="lugar" maxlength="200" value="${v('lugar')}" placeholder="Bloque, piso, área…"></label>
         </div>
       </div>
       <div class="${publico ? 'panel' : 'caja'}">
@@ -1137,6 +1138,7 @@
     const faltan = req.filter((k) => !o[k]);
     if (faltan.length) return { msg: `Te falta ${listaY(faltan.map((k) => NOMBRES_CAMPO[k]))}.`, campos: faltan };
     if (o.correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.correo)) return { msg: 'El correo no parece válido.', campos: ['correo'] };
+    if (o.interventor_correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.interventor_correo)) return { msg: 'El correo del funcionario Uninorte no parece válido.', campos: ['interventor_correo'] };
     if (o.fecha_fin < o.fecha_inicio) return { msg: 'La fecha de finalización no puede ser anterior a la de inicio.', campos: ['fecha_fin'] };
     if (o.hora_inicio && o.hora_fin && o.fecha_inicio === o.fecha_fin && o.hora_fin <= o.hora_inicio) return { msg: 'La hora de fin debe ser después de la de inicio.', campos: ['hora_fin'] };
     return null;
