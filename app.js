@@ -122,6 +122,14 @@
   };
   const grupoDe = (id) => (id ? S.grupos.find((g) => g.id === id) : null);
 
+  // Piezas de seguridad (contenido en piezas.js)
+  const PIEZAS = Array.isArray(window.PIEZAS) ? window.PIEZAS : [];
+  const piezaDe = (id) => PIEZAS.find((p) => p.id === id);
+  const piezasPara = (t) => PIEZAS.filter((p) => p.general || (p.riesgos || []).some((r) => (t.riesgos || []).includes(r)));
+  const enlacePieza = (id) => `${urlBase()}?pieza=${encodeURIComponent(id)}`;
+  // Texto con **negrita** (escapado antes)
+  const conNegrita = (txt) => esc(txt).replace(/\\\*/g, '&#42;').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+
   /* ------------------------------------------------------------------
      Reglas de documentos
      ------------------------------------------------------------------ */
@@ -741,6 +749,7 @@
     if (S.pestana === 'consultar') return renderConsulta();
     if (S.pestana === 'requisitos') return S.sesion ? renderRequisitos() : renderLogin();
     if (S.pestana === 'grupos') return S.sesion ? renderGrupos() : renderLogin();
+    if (S.pestana === 'piezas') return renderPiezas();
   }
 
   function cuentaMes(y, m) {
@@ -770,6 +779,7 @@
       meses.innerHTML = [
         ['registrar', 'Registrar un trabajo', 'Contratistas y funcionarios'],
         ['consultar', 'Consultar con código', 'Subir y revisar documentos'],
+        ['piezas', 'Piezas de seguridad', 'Guías y recomendaciones SST'],
         ['calendario', 'Ingreso equipo SST', 'Calendario y revisión']
       ].map(([t, a, b], i) => `<li style="--i:${i}"><button data-acc="tab" data-tab="${t}" aria-current="${S.pestana === t}">${a}<small>${b}</small></button></li>`).join('');
       pie.innerHTML = '<div>¿Tienes dudas sobre los documentos o el registro? Escríbenos a:<br><a href="mailto:aglopez@uninorte.edu.co" style="color:#fff;font-weight:700">aglopez@uninorte.edu.co</a><br><a href="mailto:aux_sst@uninorte.edu.co" style="color:#fff;font-weight:700">aux_sst@uninorte.edu.co</a></div>'; pie.style.display = 'grid';
@@ -781,8 +791,8 @@
   function pintarSecciones() {
     const oscuro = document.documentElement.getAttribute('data-theme') === 'dark';
     const items = S.sesion
-      ? [['calendario', 'Calendario'], ['registrar', 'Registrar'], ['consultar', 'Consultar'], ['grupos', 'Grupos'], ['requisitos', 'Requisitos']]
-      : [['registrar', 'Registrar trabajo'], ['consultar', 'Consultar con código']];
+      ? [['calendario', 'Calendario'], ['registrar', 'Registrar'], ['consultar', 'Consultar'], ['grupos', 'Grupos'], ['requisitos', 'Requisitos'], ['piezas', 'Piezas']]
+      : [['registrar', 'Registrar trabajo'], ['consultar', 'Consultar con código'], ['piezas', 'Piezas SST']];
     $('#secciones').innerHTML = items.map(([t, l]) => `<button data-acc="tab" data-tab="${t}" aria-current="${S.pestana === t}">${l}</button>`).join('')
       + '<span class="sep"></span>'
       + (S.sesion
@@ -1311,7 +1321,9 @@
     const o = leerForm(form);
     const r = requisitosDe({ riesgos: o.riesgos, tipo_ejecutor: o.tipo_ejecutor || 'contratista' });
     const grupo = (lista, titulo) => lista.length ? `<h4>${titulo} (${lista.length})</h4><ul>${lista.map((q) => `<li>${esc(q.nombre)}${q.riesgo !== 'general' ? ` <span class="riesgo-tag" style="--rc:${GRUPOS_REQ[q.riesgo].color}">· ${esc(GRUPOS_REQ[q.riesgo].corto)}</span>` : ''}</li>`).join('')}</ul>` : '';
-    el.innerHTML = (grupo(r.antes, '📋 Documentos para enviar antes de iniciar') + grupo(r.despues, '✅ Documentos para enviar al finalizar')) || '<span class="ayuda">No hay requisitos configurados.</span>';
+    const pz = form.id === 'form-ext' ? piezasPara({ riesgos: o.riesgos }) : [];
+    const piezasHTML = pz.length ? `<h4>📘 Lee antes de iniciar</h4><div class="pz-links">${pz.map((p) => `<button type="button" class="pz-link pz-${p.color}" data-acc="ver-pieza" data-id="${p.id}"><span aria-hidden="true">${p.icono}</span>${esc(p.titulo)}</button>`).join('')}</div>` : '';
+    el.innerHTML = ((grupo(r.antes, '📋 Documentos para enviar antes de iniciar') + grupo(r.despues, '✅ Documentos para enviar al finalizar')) || '<span class="ayuda">No hay requisitos configurados.</span>') + piezasHTML;
   }
 
   function abrirFormSST(t, fecha) {
@@ -1436,6 +1448,9 @@
         <div style="display:grid;gap:16px">
           ${faseHTML(t, 'Documentos para iniciar', res.antes, res.req.antes, 'externo')}
           ${faseHTML(t, 'Documentos de cierre (al finalizar)', res.despues, res.req.despues, 'externo', !fin)}
+          ${piezasPara(t).length ? `<div class="panel pz-aplican"><h3>📘 Piezas de seguridad para este trabajo</h3>
+            <p class="ayuda" style="margin:0 0 10px">Léelas con tu equipo antes de iniciar: tienen las especificaciones, recomendaciones y una lista de chequeo.</p>
+            <div class="pz-links">${piezasPara(t).map((p) => `<button type="button" class="pz-link pz-${p.color}" data-acc="ver-pieza" data-id="${p.id}"><span aria-hidden="true">${p.icono}</span>${esc(p.titulo)}</button>`).join('')}</div></div>` : ''}
         </div>`;
     }
     $('#vista').innerHTML = `
@@ -1517,6 +1532,115 @@
       ${abiertos.length ? `<div class="dia-vista" style="margin-top:16px">${abiertos.map(fila).join('')}</div>`
         : '<div class="empty" style="margin-top:16px"><span class="big">📭</span><strong>No hay trabajos abiertos</strong>Cuando registres un trabajo con el código del grupo aparecerá aquí.</div>'}
       ${cerrados.length ? `<details class="g-cerrados"><summary>Cerrados y cancelados (${cerrados.length})</summary><div class="dia-vista" style="margin-top:12px">${cerrados.map(fila).join('')}</div></details>` : ''}`;
+  }
+
+  /* ------------------------------------------------------------------
+     Piezas de seguridad (público)
+     ------------------------------------------------------------------ */
+  function portadaPieza(p) {
+    return `<div class="pz-portada pz-${p.color}">
+      <div class="pz-top"><span class="pz-sg">SG-SST</span><span class="pz-ico" aria-hidden="true">${p.icono}</span></div>
+      <h3>${esc(p.titulo)}</h3>
+      <span class="pz-imp">Tu seguridad y salud importa</span>
+      <span class="pz-lema">${esc(p.lema)}</span>
+      <span class="pz-marca">${esc(p.marca || '')}</span>
+    </div>`;
+  }
+  const chipsPieza = (p) => (p.general ? '<span class="chip-e">Para todo trabajo</span>' : (p.riesgos || []).filter((r) => RIESGOS[r]).map(chipRiesgo).join(''));
+
+  function contactosPiezaHTML() {
+    const cs = window.PIEZAS_CONTACTOS || [];
+    if (!cs.length) return '';
+    return `<div class="caja pz-contactos"><h3>☎️ Contactos de emergencia</h3>
+      <div class="pz-cont">${cs.map((c) => c.tipo === 'tel'
+        ? `<div class="pz-tel"><b>${esc(c.valor)}</b><span>${esc(c.etiqueta)}</span></div>`
+        : `<div class="pz-mail"><span>${esc(c.etiqueta)}</span><a href="mailto:${esc(c.valor)}">${esc(c.valor)}</a></div>`).join('')}</div>
+      <p class="ayuda" style="margin:10px 0 0">Llama desde el teléfono más cercano o desde los teléfonos rojos de los pasillos.</p></div>`;
+  }
+
+  function renderPiezas() {
+    $('#vista').innerHTML = `
+      <div class="estrecho">
+        <div class="hero"><h1>Piezas de <em>seguridad</em></h1>
+          <p>Material del Sistema de Gestión de Seguridad y Salud en el Trabajo de la Universidad del Norte. Léelo antes de hacer un trabajo: cada pieza tiene sus especificaciones, recomendaciones y una lista de chequeo para revisar con tu equipo.</p></div>
+        ${PIEZAS.length ? `<div class="pz-grid">${PIEZAS.map((p, i) => `
+          <article class="pz-card" style="--i:${i}">
+            <button class="pz-abrir" data-acc="ver-pieza" data-id="${p.id}" aria-label="Ver la pieza ${esc(p.titulo)}">${portadaPieza(p)}</button>
+            <div class="pz-cuerpo">
+              <div class="fila">${chipsPieza(p)}${p.norma ? `<span class="chip-e">${esc(p.norma.nombre.split(' (')[0].split(' – ')[0])}</span>` : ''}</div>
+              <p>${esc(p.resumen)}</p>
+              <div class="codigo-caja">
+                <button class="btn mini primary" data-acc="ver-pieza" data-id="${p.id}">Ver contenido</button>
+                <a class="btn mini" href="${esc(p.archivo)}" target="_blank" rel="noopener">Abrir PDF</a>
+                <a class="btn mini" href="${esc(p.archivo)}" download>Descargar</a>
+              </div>
+            </div>
+          </article>`).join('')}</div>`
+          : '<div class="empty"><span class="big">📘</span><strong>Todavía no hay piezas</strong>Pronto encontrarás aquí el material de seguridad.</div>'}
+        <div style="margin-top:18px">${contactosPiezaHTML()}</div>
+      </div>`;
+  }
+
+  function seccionPieza(sec) {
+    const nota = sec.nota ? `<p class="pz-nota">💡 ${conNegrita(sec.nota)}</p>` : '';
+    const cab = `<h3><span aria-hidden="true">${sec.icono || ''}</span>${esc(sec.titulo)}</h3>`;
+    const lista = (cls) => `<ul class="pz-ul ${cls}">${sec.items.map((x) => `<li>${conNegrita(x)}</li>`).join('')}</ul>`;
+    let cuerpo = '';
+    switch (sec.tipo) {
+      case 'texto': cuerpo = `<p class="pz-p">${conNegrita(sec.texto)}</p>`; break;
+      case 'lista': cuerpo = lista('chk'); break;
+      case 'riesgos': cuerpo = lista(sec.positivo ? 'chk' : 'alerta'); break;
+      case 'prohibido': cuerpo = lista('no'); break;
+      case 'pasos': cuerpo = `<ol class="pz-ol">${sec.items.map((x) => `<li>${conNegrita(x)}</li>`).join('')}</ol>`; break;
+      case 'chips': cuerpo = `<div class="pz-chips">${sec.items.map((x) => `<span>${esc(x)}</span>`).join('')}</div>`; break;
+      case 'puntos': cuerpo = `<div class="pz-puntos">${sec.parciales.map((x, i) => `<div class="pz-pp"><b>${i + 1}</b><span><small>Punto parcial</small>${esc(x)}</span></div>`).join('')}</div>
+        <div class="pz-final"><small>Punto de encuentro final</small><strong>${esc(sec.final)}</strong><span>Universidad del Norte</span></div>`; break;
+      case 'alarmas': cuerpo = `<div class="pz-alarmas">${sec.items.map((a, i) => `<div class="pz-al"><b>${i + 1}. ${esc(a.nombre)}</b><span class="son">🔊 ${esc(a.sonido)}</span><span>${esc(a.accion)}</span></div>`).join('')}</div>`; break;
+      case 'roles': cuerpo = `<div class="pz-roles">${sec.items.map((r) => `<div><b>${esc(r.nombre)}</b><span>${esc(r.texto)}</span></div>`).join('')}</div>`; break;
+      default: cuerpo = '';
+    }
+    return `<div class="caja pz-sec">${cab}${cuerpo}${nota}</div>`;
+  }
+
+  function abrirPieza(id) {
+    const p = piezaDe(id);
+    if (!p) { aviso('No se encontró esa pieza.', 'error'); return; }
+    const compartir = encodeURIComponent(`Pieza de seguridad «${p.titulo}» · SST Universidad del Norte: ${enlacePieza(p.id)}`);
+    abrirBoard(`
+      ${cabeceraBoard(esc(p.titulo), esc(p.lema), chipsPieza(p))}
+      <div class="board-body pz-board" data-pieza="${p.id}">
+        <div class="caja pz-resumen">
+          <h3>📖 En pocas palabras</h3>
+          <p class="pz-p">${esc(p.resumen)}</p>
+          ${p.norma ? `<p class="pz-norma">⚖️ <b>${esc(p.norma.nombre)}</b>. ${esc(p.norma.detalle)} <a href="${esc(p.norma.url)}" target="_blank" rel="noopener">Leer la norma</a></p>` : ''}
+        </div>
+        ${p.reglaDeOro ? `<div class="pz-oro pz-${p.color}"><span aria-hidden="true">⭐</span><span>${conNegrita(p.reglaDeOro)}</span></div>` : ''}
+        <div class="codigo-caja pz-acciones">
+          <a class="btn mini primary" href="${esc(p.archivo)}" target="_blank" rel="noopener">Ver la pieza original</a>
+          <a class="btn mini" href="${esc(p.archivo)}" download>Descargar PDF</a>
+          <button class="btn mini" data-acc="copiar-pieza" data-id="${p.id}">Copiar enlace</button>
+          <a class="btn mini" target="_blank" rel="noopener" href="https://wa.me/?text=${compartir}">WhatsApp</a>
+        </div>
+        <details class="caja pz-vista"><summary>Vista previa de la pieza</summary><div class="pz-marco" data-src="${esc(p.archivo)}#view=FitH"></div></details>
+        ${(p.secciones || []).map(seccionPieza).join('')}
+        ${(p.checklist || []).length ? `<div class="caja pz-check">
+          <h3>☑️ Lista de chequeo antes de iniciar <span class="cnt" id="pz-cnt">0 de ${p.checklist.length}</span></h3>
+          <p class="ayuda" style="margin:0 0 10px">Revísala con tu equipo antes de empezar. Está basada en la pieza; no reemplaza el permiso de trabajo ni los documentos que pide SST.</p>
+          <div class="pz-items">${p.checklist.map((c, i) => `<label class="opcion pz-item"><input type="checkbox" name="pz_check" value="${i}"><span>${conNegrita(c)}</span></label>`).join('')}</div>
+          <div class="pz-barra"><i id="pz-barra"></i></div>
+        </div>` : ''}
+        ${p.recuerda ? `<div class="pz-rec pz-${p.color}"><small>Recuerda</small><strong>${conNegrita(p.recuerda)}</strong></div>` : ''}
+        ${contactosPiezaHTML()}
+      </div>`);
+  }
+
+  function contarChecks() {
+    const todos = $$('.pz-board input[name="pz_check"]');
+    const n = todos.filter((x) => x.checked).length;
+    const cnt = $('#pz-cnt'), barra = $('#pz-barra');
+    if (cnt) cnt.textContent = `${n} de ${todos.length}`;
+    if (barra) barra.style.width = `${todos.length ? Math.round((n / todos.length) * 100) : 0}%`;
+    if (n && n === todos.length) aviso('¡Lista completa! Trabaja seguro, regresa a casa.', 'ok');
   }
 
   /* ------------------------------------------------------------------
@@ -1950,6 +2074,12 @@
         await conCarga(el, async () => { await S.api.guardarRequisito({ ...q, activo: !q.activo }); await refrescarTodo(); });
         break;
       }
+      case 'ver-pieza': abrirPieza(el.dataset.id); break;
+      case 'copiar-pieza': {
+        const url = enlacePieza(el.dataset.id);
+        try { await navigator.clipboard.writeText(url); aviso('Enlace de la pieza copiado.', 'ok'); } catch { aviso(url); }
+        break;
+      }
       case 'avisos': abrirAvisos(); break;
       case 'activar-noti':
         if (!('Notification' in window)) { aviso('Este navegador no permite notificaciones.', 'error'); break; }
@@ -2109,6 +2239,7 @@
     const t = e.target;
     if (t.id === 'archivo-oculto') { procesarArchivo(t.files[0]); return; }
     if (t.name === 'g_trabajos') { contarMarcados(); return; }
+    if (t.name === 'pz_check') { contarChecks(); return; }
     const form = t.closest('#form-sst, #form-ext');
     if (form && t.name === 'grupo_codigo') { validarGrupoCampo(form, true); return; }
     if (form && (t.name === 'riesgos' || t.name === 'tipo_ejecutor')) pintarPrevia(form);
@@ -2136,6 +2267,13 @@
     }
     if (e.target.classList && e.target.classList.contains('miss')) e.target.classList.remove('miss');
   });
+
+  document.addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (!d.classList || !d.classList.contains('pz-vista') || !d.open) return;
+    const marco = $('.pz-marco', d);
+    if (marco && !marco.firstChild) marco.innerHTML = `<iframe src="${esc(marco.dataset.src)}" title="Vista previa de la pieza" loading="lazy"></iframe>`;
+  }, true);
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.id === 'g-buscar') { e.preventDefault(); return; }
@@ -2169,6 +2307,7 @@
       } else await S.api.cargarRequisitosPublicos();
       S.abrirTras = String(params.get('abrir') || '').trim().toUpperCase();
       if (S.abrirTras) S.pestana = 'calendario';
+      else if (params.get('pieza')) { S.pestana = 'piezas'; S.piezaTras = params.get('pieza'); }
       else if (params.get('grupo')) { S.pestana = 'consultar'; await consultar(params.get('grupo')); }
       else if (params.get('codigo')) { S.pestana = 'consultar'; await consultar(params.get('codigo')); }
       else S.pestana = S.sesion ? 'calendario' : 'registrar';
@@ -2181,6 +2320,7 @@
     }
     S.cargando = false;
     render();
+    if (S.piezaTras) { const pz = S.piezaTras; S.piezaTras = ''; abrirPieza(pz); }
     if (S.sesion) { if (S.abrirTras) abrirPendiente(); else resumenNuevos(); }
     else if (S.abrirTras) aviso('Ingresa con la cuenta del equipo SST para ver el trabajo.');
   }
