@@ -1621,7 +1621,7 @@
           <button class="btn mini" data-acc="copiar-pieza" data-id="${p.id}">Copiar enlace</button>
           <a class="btn mini" target="_blank" rel="noopener" href="https://wa.me/?text=${compartir}">WhatsApp</a>
         </div>
-        <details class="caja pz-vista"><summary>Vista previa de la pieza</summary><div class="pz-marco" data-src="${esc(p.archivo)}#view=FitH"></div></details>
+        <details class="caja pz-vista"><summary>Vista previa de la pieza</summary><div class="pz-marco" data-src="${esc(p.archivo)}#navpanes=0&view=FitH"></div></details>
         ${(p.secciones || []).map(seccionPieza).join('')}
         ${(p.checklist || []).length ? `<div class="caja pz-check">
           <h3>☑️ Lista de chequeo antes de iniciar <span class="cnt" id="pz-cnt">0 de ${p.checklist.length}</span></h3>
