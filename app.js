@@ -72,7 +72,18 @@
   const hora = (h) => (h ? String(h).slice(0, 5) : '');
   const fmtFechaHora = (ts) => ts ? new Intl.DateTimeFormat('es-CO', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(ts)) : '';
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Math.random().toString(36).slice(2) + Date.now());
-  const nuevoCodigo = () => Array.from({ length: 10 }, () => '0123456789ABCDEF'[Math.floor(Math.random() * 16)]).join('');
+  // Código de trabajo: una palabra del nombre + 4 números (igual que en la base de datos)
+  const GENERICAS = ['MANTENIMIENTO', 'INSTALACION', 'REPARACION', 'REVISION', 'TRABAJO', 'TRABAJOS', 'CAMBIO', 'CAMBIOS', 'ADECUACION', 'ADECUACIONES', 'LIMPIEZA', 'GENERAL', 'PREVENTIVO', 'CORRECTIVO', 'ARREGLO', 'MONTAJE', 'DESMONTE', 'SUMINISTRO', 'PARA', 'ENTRE', 'SOBRE', 'AREA', 'ZONA', 'NUEVO', 'NUEVA', 'APOYO', 'SERVICIO'];
+  const nuevoCodigo = (titulo) => {
+    const ws = String(titulo || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+    const buenas = ws.filter((w) => w.length >= 4 && !GENERICAS.includes(w));
+    const w = (buenas.find((x) => x.length <= 10) || buenas[0] || ws.find((x) => x.length >= 3) || 'TRABAJO').slice(0, 10);
+    return `${w}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`;
+  };
+  // Códigos escritos por SST: mayúsculas, sin tildes, palabras unidas con guion
+  const normalizarCodigo = (txt) => String(txt || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30).replace(/-+$/, '');
+  const codigoValido = (c) => /^[A-Z0-9]+(-[A-Z0-9]+)*$/.test(c) && c.length >= 3 && c.length <= 30;
   const vacioANull = (v) => (v === '' || v === undefined ? null : v);
   const nombreSeguro = (n) => String(n).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w.\-]+/g, '_').slice(-80);
 
@@ -107,7 +118,10 @@
     documentos: [],
     requisitos: [],
     grupos: [],
-    filtros: { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', grupo: '', pendientes: true },
+    areas: [],      // áreas que solicitan trabajos (catálogo de SST)
+    sistemas: [],   // sistemas de cada área (p. ej. Mantenimiento → Aire acondicionado)
+    portada: false, // portada de inicio antes de entrar a la página
+    filtros: { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', grupo: '', sistema: '', pendientes: true },
     detalleId: null,
     rechazando: null,
     subida: null,
@@ -199,7 +213,13 @@
       document.head.appendChild(s);
     });
   }
-  const errorTexto = (e) => (e && (e.message || e.error_description || e.msg)) || String(e);
+  const errorTexto = (e) => {
+    const m = (e && (e.message || e.error_description || e.msg)) || String(e);
+    if (/trabajos_areas_nombre_key/.test(m)) return 'Ya existe un área con ese nombre.';
+    if (/trabajos_sistemas_area_id_nombre_key/.test(m)) return 'Esa área ya tiene un sistema con ese nombre.';
+    if (/trabajos_grupos_codigo_key/.test(m)) return 'Ese código ya lo usa otro grupo. Escribe uno distinto.';
+    return m;
+  };
   function lanzar(error) { if (error) throw new Error(errorTexto(error)); }
 
   const sbApi = {
@@ -238,19 +258,42 @@
     },
     desuscribir() { if (this.canal) { this.sb.removeChannel(this.canal); this.canal = null; } },
     async cargar() {
-      const [t, d, r, g] = await Promise.all([
+      const [t, d, r, g, a, si] = await Promise.all([
         this.sb.from('trabajos').select('*').order('fecha_inicio', { ascending: true }),
         this.sb.from('trabajos_documentos').select('*'),
         this.sb.from('trabajos_requisitos').select('*').order('orden', { ascending: true }),
-        this.sb.from('trabajos_grupos').select('*').order('nombre', { ascending: true })
+        this.sb.from('trabajos_grupos').select('*').order('nombre', { ascending: true }),
+        this.sb.from('trabajos_areas').select('*').order('orden').order('nombre'),
+        this.sb.from('trabajos_sistemas').select('*').order('orden').order('nombre')
       ]);
-      lanzar(t.error); lanzar(d.error); lanzar(r.error); lanzar(g.error);
-      S.trabajos = t.data; S.documentos = d.data; S.requisitos = r.data; S.grupos = g.data;
+      lanzar(t.error); lanzar(d.error); lanzar(r.error); lanzar(g.error); lanzar(a.error); lanzar(si.error);
+      S.trabajos = t.data; S.documentos = d.data; S.requisitos = r.data; S.grupos = g.data; S.areas = a.data; S.sistemas = si.data;
     },
     async cargarRequisitosPublicos() {
-      const { data, error } = await this.sb.from('trabajos_requisitos').select('*').eq('activo', true).order('orden');
-      lanzar(error); S.requisitos = data;
+      const [r, a, si] = await Promise.all([
+        this.sb.from('trabajos_requisitos').select('*').eq('activo', true).order('orden'),
+        this.sb.from('trabajos_areas').select('*').eq('activo', true).order('orden').order('nombre'),
+        this.sb.from('trabajos_sistemas').select('*').eq('activo', true).order('orden').order('nombre')
+      ]);
+      lanzar(r.error); lanzar(a.error); lanzar(si.error);
+      S.requisitos = r.data; S.areas = a.data; S.sistemas = si.data;
     },
+    async guardarArea(x) {
+      const datos = { nombre: x.nombre, activo: x.activo !== false, orden: Number(x.orden) || 0 };
+      const q = x.id
+        ? this.sb.from('trabajos_areas').update(datos).eq('id', x.id).select().single()
+        : this.sb.from('trabajos_areas').insert(datos).select().single();
+      const { data, error } = await q; lanzar(error); return data;
+    },
+    async eliminarArea(id) { const { error } = await this.sb.from('trabajos_areas').delete().eq('id', id); lanzar(error); },
+    async guardarSistema(x) {
+      const datos = { area_id: x.area_id, nombre: x.nombre, activo: x.activo !== false, orden: Number(x.orden) || 0 };
+      const q = x.id
+        ? this.sb.from('trabajos_sistemas').update(datos).eq('id', x.id).select().single()
+        : this.sb.from('trabajos_sistemas').insert(datos).select().single();
+      const { data, error } = await q; lanzar(error); return data;
+    },
+    async eliminarSistema(id) { const { error } = await this.sb.from('trabajos_sistemas').delete().eq('id', id); lanzar(error); },
     async guardarTrabajo(t) {
       const datos = limpiarTrabajo(t);
       const q = t.id
@@ -343,12 +386,13 @@
       lugar: t.lugar, fecha_inicio: t.fecha_inicio, fecha_fin: t.fecha_fin,
       hora_inicio: vacioANull(t.hora_inicio), hora_fin: vacioANull(t.hora_fin),
       riesgos: t.riesgos || [], estado: t.estado || 'programado',
-      observaciones: vacioANull(t.observaciones), grupo_id: vacioANull(t.grupo_id)
+      observaciones: vacioANull(t.observaciones), grupo_id: vacioANull(t.grupo_id), sistema: vacioANull(t.sistema)
     };
   }
 
   function limpiarGrupo(g) {
     return {
+      ...(g.codigo ? { codigo: g.codigo } : {}),
       nombre: g.nombre, contacto: vacioANull(g.contacto), correo: vacioANull(g.correo),
       telefono: vacioANull(g.telefono), notas: vacioANull(g.notas), activo: g.activo !== false
     };
@@ -389,7 +433,7 @@
     ['caliente', 'despues', 'Cierre del permiso de trabajo en caliente', 'Incluye vigilancia del área después de terminar (mín. 30 min).', false, 94]
   ];
 
-  const demo = { trabajos: [], documentos: [], requisitos: [], grupos: [], archivos: new Map() };
+  const demo = { trabajos: [], documentos: [], requisitos: [], grupos: [], areas: [], sistemas: [], archivos: new Map() };
 
   function crearDemo() {
     demo.requisitos = REQ_BASE.map(([riesgo, fase, nombre, descripcion, solo, orden]) => ({
@@ -398,12 +442,14 @@
     const h = hoy();
     demo.grupos = [{ id: uid(), codigo: 'G-DEMO2026', nombre: 'Metalmecánica Atlántico Ltda.', contacto: 'Luis Gómez', correo: 'contacto@metalatlantico.com', telefono: '300 555 0199', notas: 'Hace trabajos de soldadura casi todas las semanas.', activo: true, created_at: new Date().toISOString() }];
     const GD = demo.grupos[0].id;
+    demo.areas = [{ id: uid(), nombre: 'Mantenimiento', activo: true, orden: 1 }, { id: uid(), nombre: 'Planta Física', activo: true, orden: 2 }];
+    demo.sistemas = ['Aire acondicionado', 'Pinturas', 'Ventanas'].map((n, i) => ({ id: uid(), area_id: demo.areas[0].id, nombre: n, activo: true, orden: i + 1 }));
     const base = {
       descripcion: '', tipo_ejecutor: 'contratista', telefono: '300 555 0101', correo: 'contacto@empresa.com.co',
       interventor: 'Planta Física', num_trabajadores: 3, hora_inicio: '07:00', hora_fin: '16:00',
       observaciones: '', origen: 'sst'
     };
-    const T = (o) => ({ id: uid(), codigo: nuevoCodigo(), created_at: new Date().toISOString(), ...base, ...o });
+    const T = (o) => ({ id: uid(), codigo: nuevoCodigo(o.titulo), created_at: new Date().toISOString(), ...base, ...o });
     const lista = [
       T({ titulo: 'Mantenimiento de cubierta', empresa: 'Techos del Caribe S.A.S.', responsable: 'Carlos Pérez', lugar: 'Bloque G · cubierta', fecha_inicio: sumarDias(h, -1), fecha_fin: sumarDias(h, 2), riesgos: ['alturas'], estado: 'en_ejecucion', num_trabajadores: 4, _docs: { antes: [99, 'aprobado'] } }),
       T({ titulo: 'Soldadura de barandas en escalera', empresa: 'Metalmecánica Atlántico Ltda.', responsable: 'Luis Gómez', lugar: 'Bloque K · escalera norte', fecha_inicio: sumarDias(h, 3), fecha_fin: sumarDias(h, 4), riesgos: ['alturas', 'caliente', 'cilindros'], estado: 'programado', descripcion: 'Corte y soldadura de barandas metálicas con equipo oxiacetilénico.', grupo_id: GD, _docs: { antes: [5, 'enviado'] } }),
@@ -447,12 +493,25 @@
     async init() { crearDemo(); S.sesion = true; S.usuario = 'demostración'; },
     async login() { S.sesion = true; S.usuario = 'demostración'; },
     async logout() { S.sesion = false; S.usuario = ''; },
-    async cargar() { S.trabajos = copia(demo.trabajos); S.documentos = copia(demo.documentos); S.requisitos = copia(demo.requisitos); S.grupos = copia(demo.grupos); },
-    async cargarRequisitosPublicos() { S.requisitos = copia(demo.requisitos.filter((r) => r.activo)); },
+    async cargar() { S.trabajos = copia(demo.trabajos); S.documentos = copia(demo.documentos); S.requisitos = copia(demo.requisitos); S.grupos = copia(demo.grupos); S.areas = copia(demo.areas); S.sistemas = copia(demo.sistemas); },
+    async cargarRequisitosPublicos() { S.requisitos = copia(demo.requisitos.filter((r) => r.activo)); S.areas = copia(demo.areas.filter((a) => a.activo)); S.sistemas = copia(demo.sistemas); },
+    async guardarArea(x) {
+      if (demo.areas.some((a) => a.nombre.toLowerCase() === x.nombre.toLowerCase() && a.id !== x.id)) throw new Error('Ya existe un área con ese nombre.');
+      const datos = { nombre: x.nombre, activo: x.activo !== false, orden: Number(x.orden) || 0 };
+      if (x.id) { const a = demo.areas.find((y) => y.id === x.id); Object.assign(a, datos); return copia(a); }
+      const n = { id: uid(), ...datos }; demo.areas.push(n); return copia(n);
+    },
+    async eliminarArea(id) { demo.areas = demo.areas.filter((a) => a.id !== id); demo.sistemas = demo.sistemas.filter((x) => x.area_id !== id); },
+    async guardarSistema(x) {
+      if (demo.sistemas.some((y) => y.area_id === x.area_id && y.nombre.toLowerCase() === x.nombre.toLowerCase() && y.id !== x.id)) throw new Error('Esa área ya tiene un sistema con ese nombre.');
+      const n = { id: x.id || uid(), area_id: x.area_id, nombre: x.nombre, activo: x.activo !== false, orden: Number(x.orden) || 0 };
+      demo.sistemas = demo.sistemas.filter((y) => y.id !== n.id).concat(n); return copia(n);
+    },
+    async eliminarSistema(id) { demo.sistemas = demo.sistemas.filter((x) => x.id !== id); },
     async guardarTrabajo(t) {
       const datos = limpiarTrabajo(t);
       if (t.id) { const x = demo.trabajos.find((y) => y.id === t.id); Object.assign(x, datos); return copia(x); }
-      const nuevo = { id: uid(), codigo: nuevoCodigo(), origen: 'sst', created_at: new Date().toISOString(), ...datos };
+      const nuevo = { id: uid(), codigo: nuevoCodigo(datos.titulo), origen: 'sst', created_at: new Date().toISOString(), ...datos };
       demo.trabajos.push(nuevo); return copia(nuevo);
     },
     async actualizarTrabajo(id, cambios) { const x = demo.trabajos.find((y) => y.id === id); Object.assign(x, cambios); return copia(x); },
@@ -488,13 +547,17 @@
         g = demo.grupos.find((x) => x.activo && x.codigo === String(datos.grupo_codigo).trim().toUpperCase());
         if (!g) throw new Error('El código de grupo no existe o está desactivado');
       }
-      const t = { id: uid(), codigo: nuevoCodigo(), origen: 'externo', created_at: new Date().toISOString(), ...limpiarTrabajo({ ...datos, riesgos, estado: 'por_aprobar' }), grupo_id: g ? g.id : null };
+      const t = { id: uid(), codigo: nuevoCodigo(datos.titulo), origen: 'externo', created_at: new Date().toISOString(), ...limpiarTrabajo({ ...datos, riesgos, estado: 'por_aprobar' }), grupo_id: g ? g.id : null };
       demo.trabajos.push(t); return { id: t.id, codigo: t.codigo, grupo: g ? g.nombre : null };
     },
     async guardarGrupo(g) {
       const datos = limpiarGrupo(g);
-      if (g.id) { const x = demo.grupos.find((y) => y.id === g.id); Object.assign(x, datos); return copia(x); }
-      const nuevo = { id: uid(), codigo: 'G-' + nuevoCodigo().slice(0, 8), created_at: new Date().toISOString(), ...datos };
+      if (g.id) {
+        if (datos.codigo && demo.grupos.some((x) => x.codigo === datos.codigo && x.id !== g.id)) throw new Error('Ese código ya lo usa otro grupo. Escribe uno distinto.');
+        const x = demo.grupos.find((y) => y.id === g.id); Object.assign(x, datos); return copia(x);
+      }
+      if (datos.codigo && demo.grupos.some((x) => x.codigo === datos.codigo && x.id !== g.id)) throw new Error('Ese código ya lo usa otro grupo. Escribe uno distinto.');
+      const nuevo = { id: uid(), created_at: new Date().toISOString(), ...datos, codigo: datos.codigo || 'G-' + String(Math.random()).slice(2, 10) };
       demo.grupos.push(nuevo); return copia(nuevo);
     },
     async eliminarGrupo(id) {
@@ -626,6 +689,8 @@
       'Responsable': o.responsable,
       'Teléfono': o.telefono || '—',
       'Correo': o.correo || '—',
+      'Área que lo pide': o.interventor || '—',
+      ...(o.sistema ? { 'Sistema': o.sistema } : {}),
       'Lugar': o.lugar,
       'Fechas': rangoTexto(o) + (horario ? ` (${horario})` : ''),
       'Tareas de alto riesgo': (o.riesgos || []).map((r) => RIESGOS[r] && RIESGOS[r].nombre).filter(Boolean).join(', ') || 'Ninguna',
@@ -738,7 +803,69 @@
   /* ------------------------------------------------------------------
      Render general: riel, secciones y vista
      ------------------------------------------------------------------ */
+  function portadaHTML() {
+    const generales = S.requisitos.filter((q) => q.activo !== false && q.riesgo === 'general' && q.fase === 'antes').sort((a, b) => a.orden - b.orden);
+    const accesos = [
+      ['registrar', '📝', 'Registrar un trabajo', 'Contratistas y funcionarios'],
+      ['consultar', '🔎', 'Consultar con código', 'Sube y revisa tus documentos'],
+      ['piezas', '📘', 'Piezas de seguridad', 'Guías y recomendaciones SST']
+    ];
+    return `<div class="portada" role="region" aria-label="Portada">
+      <section class="pt-hero">
+        <header class="pt-top">
+          <span class="logo" role="img" aria-label="Universidad del Norte"></span>
+          <span class="pt-unidad"><b>Seguridad y Salud en el Trabajo</b>Universidad del Norte</span>
+          <span class="sp"></span>
+          <button class="pt-link" data-acc="portada-ir" data-p="calendario">Equipo SST</button>
+        </header>
+        <div class="pt-hero-in">
+          <span class="pt-eyebrow">SG-SST · Trabajos de contratistas y funcionarios</span>
+          <h1>Registro y control de <em>trabajos</em> en el campus</h1>
+          <p class="pt-lead">Aquí podrás registrar los trabajos que vas a realizar en la Universidad del Norte, enviar los documentos de Seguridad y Salud en el Trabajo y consultar su estado en cualquier momento.</p>
+          <div class="pt-cta">
+            <button class="pt-ingresar" data-acc="ingresar">Ingresar <span aria-hidden="true">→</span></button>
+            <button class="pt-sec" data-acc="portada-ir" data-p="consultar">Ya tengo un código</button>
+          </div>
+          <div class="pt-accesos">${accesos.map(([p, ico, t, d], i) => `
+            <button class="pt-acceso" style="--i:${i}" data-acc="portada-ir" data-p="${p}"><span class="ico" aria-hidden="true">${ico}</span><b>${t}</b><small>${d}</small></button>`).join('')}
+          </div>
+        </div>
+      </section>
+      <section class="pt-cuerpo">
+        <div class="pt-bloque">
+          <h2>¿Cómo funciona?</h2>
+          <ol class="pt-pasos">
+            <li><b>Registra el trabajo</b><span>Fechas, lugar, el área que lo pide y las tareas de alto riesgo que incluye.</span></li>
+            <li><b>Guarda tu código</b><span>Es una palabra con números, por ejemplo PINTURA-4821. Con él vuelves cuando quieras.</span></li>
+            <li><b>Envía los documentos</b><span>La página te dice cuáles necesitas antes de iniciar y cuáles al finalizar.</span></li>
+            <li><b>SST revisa y aprueba</b><span>El equipo de SST revisa cada documento y te avisa si falta algo.</span></li>
+          </ol>
+        </div>
+        <div class="pt-bloque">
+          <h2>Ten a la mano</h2>
+          ${generales.length ? `<ul class="pt-docs">${generales.map((q) => `<li>${esc(q.nombre)}</li>`).join('')}</ul>` : ''}
+          <p class="pt-nota">Si el trabajo incluye ${Object.keys(RIESGOS).map(chipRiesgo).join(' ')}, se piden documentos adicionales según el riesgo.</p>
+          <p class="pt-nota">Registra el trabajo con anticipación para que el equipo de SST alcance a revisar los documentos antes de iniciar.</p>
+        </div>
+      </section>
+      <footer class="pt-pie">
+        <div>¿Dudas sobre el registro o los documentos? <a href="mailto:aglopez@uninorte.edu.co">aglopez@uninorte.edu.co</a> · <a href="mailto:aux_sst@uninorte.edu.co">aux_sst@uninorte.edu.co</a></div>
+        <div>Emergencias en la universidad: <b>*911</b> · Centro de Soluciones <b>505</b></div>
+      </footer>
+    </div>`;
+  }
+
+  function pintarPortada() {
+    const root = $('#portada-root');
+    if (!root) return;
+    document.body.classList.toggle('con-portada', !!S.portada);
+    if (!S.portada) { root.innerHTML = ''; root._html = ''; return; }
+    const html = portadaHTML();
+    if (root._html !== html) { root.innerHTML = html; root._html = html; }
+  }
+
   function render() {
+    pintarPortada();
     $('#raiz').classList.toggle('rail-off', S.railOff && S.sesion);
     pintarRail();
     pintarSecciones();
@@ -777,11 +904,12 @@
       anio.innerHTML = '';
       meses.className = 'accesos';
       meses.innerHTML = [
+        ['inicio', 'Inicio', 'Portada de la página'],
         ['registrar', 'Registrar un trabajo', 'Contratistas y funcionarios'],
         ['consultar', 'Consultar con código', 'Subir y revisar documentos'],
         ['piezas', 'Piezas de seguridad', 'Guías y recomendaciones SST'],
         ['calendario', 'Ingreso equipo SST', 'Calendario y revisión']
-      ].map(([t, a, b], i) => `<li style="--i:${i}"><button data-acc="tab" data-tab="${t}" aria-current="${S.pestana === t}">${a}<small>${b}</small></button></li>`).join('');
+      ].map(([t, a, b], i) => `<li style="--i:${i}"><button ${t === 'inicio' ? 'data-acc="ir-portada"' : `data-acc="tab" data-tab="${t}" aria-current="${S.pestana === t}"`}>${a}<small>${b}</small></button></li>`).join('');
       pie.innerHTML = '<div>¿Tienes dudas sobre los documentos o el registro? Escríbenos a:<br><a href="mailto:aglopez@uninorte.edu.co" style="color:#fff;font-weight:700">aglopez@uninorte.edu.co</a><br><a href="mailto:aux_sst@uninorte.edu.co" style="color:#fff;font-weight:700">aux_sst@uninorte.edu.co</a></div>'; pie.style.display = 'grid';
     }
     if (railAnimado) $$('li', meses).forEach((li) => { li.style.animation = 'none'; });
@@ -791,7 +919,7 @@
   function pintarSecciones() {
     const oscuro = document.documentElement.getAttribute('data-theme') === 'dark';
     const items = S.sesion
-      ? [['calendario', 'Calendario'], ['registrar', 'Registrar'], ['consultar', 'Consultar'], ['grupos', 'Grupos'], ['requisitos', 'Requisitos'], ['piezas', 'Piezas']]
+      ? [['calendario', 'Calendario'], ['registrar', 'Registrar'], ['consultar', 'Consultar'], ['grupos', 'Grupos'], ['requisitos', 'Ajustes'], ['piezas', 'Piezas']]
       : [['registrar', 'Registrar trabajo'], ['consultar', 'Consultar con código'], ['piezas', 'Piezas SST']];
     $('#secciones').innerHTML = items.map(([t, l]) => `<button data-acc="tab" data-tab="${t}" aria-current="${S.pestana === t}">${l}</button>`).join('')
       + '<span class="sep"></span>'
@@ -800,6 +928,8 @@
         : '<button data-acc="ingresar">Ingreso SST</button>')
       + `<button class="tema" data-acc="tema" title="Cambiar a modo ${oscuro ? 'claro' : 'oscuro'}" aria-label="Cambiar tema">${oscuro ? '☀️' : '🌙'}</button>`;
   }
+
+  const sistemasUsados = () => [...new Set(S.trabajos.map((t) => t.sistema).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
   function campana() {
     const n = S.trabajos.filter((t) => t.estado === 'por_aprobar').length;
@@ -834,7 +964,8 @@
     const f = S.filtros;
     const txt = f.texto.trim().toLowerCase();
     return lista.filter((t) => {
-      if (txt && ![t.titulo, t.empresa, t.lugar, t.responsable, t.codigo, t.interventor, (grupoDe(t.grupo_id) || {}).nombre].join(' ').toLowerCase().includes(txt)) return false;
+      if (txt && ![t.titulo, t.empresa, t.lugar, t.responsable, t.codigo, t.interventor, t.sistema, (grupoDe(t.grupo_id) || {}).nombre].join(' ').toLowerCase().includes(txt)) return false;
+      if (f.sistema && t.sistema !== f.sistema) return false;
       if (f.grupo === 'ninguno' && t.grupo_id) return false;
       if (f.grupo && f.grupo !== 'ninguno' && t.grupo_id !== f.grupo) return false;
       if (f.riesgo === 'ninguno' && t.riesgos.length) return false;
@@ -886,10 +1017,11 @@
         <select class="entrada" id="f-riesgo">${opt('', 'Todos los riesgos', f.riesgo)}${Object.entries(RIESGOS).map(([k, r]) => opt(k, r.nombre, f.riesgo)).join('')}${opt('ninguno', 'Sin riesgo especial', f.riesgo)}</select>
         <select class="entrada" id="f-ejecutor">${opt('', 'Contratistas y funcionarios', f.ejecutor)}${opt('contratista', 'Solo contratistas', f.ejecutor)}${opt('funcionario', 'Solo funcionarios', f.ejecutor)}</select>
         <select class="entrada" id="f-estado">${opt('', 'Todos los estados', f.estado)}${Object.entries(ESTADOS).map(([k, v]) => opt(k, v, f.estado)).join('')}</select>
+        ${sistemasUsados().length ? `<select class="entrada" id="f-sistema">${opt('', 'Todos los sistemas', f.sistema)}${sistemasUsados().map((x) => opt(x, x, f.sistema)).join('')}</select>` : ''}
         ${S.grupos.length ? `<select class="entrada" id="f-grupo">${opt('', 'Todos los grupos', f.grupo)}${opt('ninguno', 'Sin grupo', f.grupo)}${S.grupos.map((g) => opt(g.id, g.nombre, f.grupo)).join('')}</select>` : ''}
         ${lista ? `<label class="opcion" style="padding:7px 12px"><input type="checkbox" id="f-pendientes" ${f.pendientes ? 'checked' : ''}> Ocultar cerrados</label>
           <button class="btn" data-acc="csv">⬇ Excel (CSV)</button>` : ''}
-        ${(f.texto || f.riesgo || f.semaforo || f.ejecutor || f.estado || f.grupo) ? '<button class="btn fantasma" data-acc="limpiar-filtros">Limpiar filtros</button>' : ''}
+        ${(f.texto || f.riesgo || f.semaforo || f.ejecutor || f.estado || f.grupo || f.sistema) ? '<button class="btn fantasma" data-acc="limpiar-filtros">Limpiar filtros</button>' : ''}
       </div>
       <div class="layout ${S.sideOff ? 'side-off' : ''}" id="layout">
         <section id="cuerpo"></section>
@@ -1023,7 +1155,7 @@
         const r = resumenDocs(t); const s = semaforo(t, r);
         return `<tr data-acc="detalle" data-id="${t.id}">
           <td><div class="fecha">${esc(rangoTexto(t))}</div><div class="sub">${esc(horarioCorto(t))}</div></td>
-          <td><div class="tt">${esc(t.titulo)}</div><div class="sub">${esc(t.lugar)}</div></td>
+          <td><div class="tt">${esc(t.titulo)}</div><div class="sub">${esc(t.lugar)}${t.sistema ? ` · ${esc(t.sistema)}` : ''}</div></td>
           <td><div>${esc(t.empresa)}</div><div class="sub">${t.tipo_ejecutor === 'funcionario' ? 'Funcionario' : 'Contratista'} · ${esc(t.responsable)}${grupoDe(t.grupo_id) ? ` · 👥 ${esc(grupoDe(t.grupo_id).codigo)}` : ''}</div></td>
           <td>${t.riesgos.length ? `<div style="display:flex;gap:4px;flex-wrap:wrap">${t.riesgos.map(chipRiesgo).join('')}</div>` : '<span class="sub">Ninguno</span>'}</td>
           <td>${celdaNum(r.antes)}</td><td>${celdaNum(r.despues)}</td>
@@ -1079,14 +1211,14 @@
 
   function descargarCSV() {
     const items = [...enRango(filtrar(S.trabajos))].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio));
-    const cols = ['Código', 'Trabajo', 'Tipo', 'Empresa / dependencia', 'Grupo', 'Responsable', 'Teléfono', 'Correo', 'Área Uninorte', 'Correo funcionario Uninorte', 'Lugar', 'Fecha inicio', 'Fecha fin', 'Hora inicio', 'Hora fin', 'Riesgos', 'Estado', 'Documentos', 'Para iniciar recibidos', 'Para iniciar aprobados', 'Para iniciar total', 'Cierre recibidos', 'Cierre aprobados', 'Cierre total', 'Documentos faltantes'];
+    const cols = ['Código', 'Trabajo', 'Tipo', 'Empresa / dependencia', 'Grupo', 'Responsable', 'Teléfono', 'Correo', 'Área Uninorte', 'Sistema', 'Correo funcionario Uninorte', 'Lugar', 'Fecha inicio', 'Fecha fin', 'Hora inicio', 'Hora fin', 'Riesgos', 'Estado', 'Documentos', 'Para iniciar recibidos', 'Para iniciar aprobados', 'Para iniciar total', 'Cierre recibidos', 'Cierre aprobados', 'Cierre total', 'Documentos faltantes'];
     const celda = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const filas = items.map((t) => {
       const r = resumenDocs(t);
       const faltantes = [...r.req.antes, ...(terminado(t) ? r.req.despues : [])]
         .filter((q) => { const d = docDe(t.id, q.id); return !d || d.estado === 'rechazado'; })
         .map((q) => q.nombre).join(' | ');
-      return [t.codigo, t.titulo, t.tipo_ejecutor === 'funcionario' ? 'Funcionario' : 'Contratista', t.empresa, (grupoDe(t.grupo_id) || {}).nombre || '', t.responsable, t.telefono, t.correo, t.interventor, t.interventor_correo, t.lugar,
+      return [t.codigo, t.titulo, t.tipo_ejecutor === 'funcionario' ? 'Funcionario' : 'Contratista', t.empresa, (grupoDe(t.grupo_id) || {}).nombre || '', t.responsable, t.telefono, t.correo, t.interventor, t.sistema, t.interventor_correo, t.lugar,
         t.fecha_inicio, t.fecha_fin, hora(t.hora_inicio), hora(t.hora_fin), t.riesgos.map((x) => RIESGOS[x].nombre).join(', ') || 'Ninguno',
         ESTADOS[t.estado], SEMAFORO[semaforo(t, r)], r.antes.recibidos, r.antes.aprobados, r.antes.total, r.despues.recibidos, r.despues.aprobados, r.despues.total, faltantes].map(celda).join(';');
     });
@@ -1123,7 +1255,7 @@
     const info = [
       ['Empresa / dependencia', t.empresa], ['Tipo', t.tipo_ejecutor === 'funcionario' ? 'Funcionario Uninorte' : 'Contratista'],
       ['Responsable', t.responsable], ['Teléfono', t.telefono || '—'], ['Correo', t.correo || '—'],
-      ['Área Uninorte que lo pidió', t.interventor || '—'], ['Correo del funcionario Uninorte', t.interventor_correo || '—'], ['Lugar', t.lugar], ['Fechas', rangoTexto(t)],
+      ['Área Uninorte que lo pidió', t.interventor || '—'], ...(t.sistema ? [['Sistema', t.sistema]] : []), ['Correo del funcionario Uninorte', t.interventor_correo || '—'], ['Lugar', t.lugar], ['Fechas', rangoTexto(t)],
       ['Horario', horarioCorto(t) || '—'], ['N.º de trabajadores', t.num_trabajadores || '—'],
       ['Registrado por', t.origen === 'externo' ? 'El contratista / funcionario' : 'Equipo SST'], ['Código', t.codigo],
       ['Grupo', grupoDe(t.grupo_id) ? `${grupoDe(t.grupo_id).nombre} (${grupoDe(t.grupo_id).codigo})` : 'Sin grupo']
@@ -1224,6 +1356,48 @@
   const AYUDA_GRUPO = 'Si el equipo SST le dio un código de grupo a tu empresa, escríbelo: este trabajo quedará en tu lista y verás todos tus trabajos con ese mismo código. Si no tienes, déjalo vacío.';
   const NOMBRES_CAMPO = { titulo: 'el trabajo a realizar', empresa: 'la empresa o dependencia', responsable: 'el responsable', telefono: 'el teléfono', correo: 'el correo', lugar: 'el lugar', fecha_inicio: 'la fecha de inicio', fecha_fin: 'la fecha de finalización' };
 
+  // Área que pide el trabajo y su sistema (catálogo que SST edita en Ajustes)
+  const ordenar = (a, b) => (a.orden || 0) - (b.orden || 0) || a.nombre.localeCompare(b.nombre);
+  const areasActivas = () => S.areas.filter((a) => a.activo).sort(ordenar);
+  const sistemasDe = (areaId, incluir) => S.sistemas.filter((x) => x.area_id === areaId && (x.activo || x.nombre === incluir)).sort(ordenar);
+  const areaPorNombre = (n) => (n ? S.areas.find((a) => a.nombre.toLowerCase() === String(n).trim().toLowerCase()) : null);
+
+  function opcionesSistema(areaId, actual) {
+    const lista = sistemasDe(areaId, actual);
+    const conocido = lista.some((x) => x.nombre === actual);
+    return `<option value="">Selecciona el sistema…</option>${lista.map((x) => `<option value="${x.id}" ${x.nombre === actual ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}<option value="otro" ${actual && !conocido ? 'selected' : ''}>Otro</option>`;
+  }
+
+  function camposArea(t) {
+    if (!S.areas.length) return `<label>Área o funcionario Uninorte que lo pide<input name="interventor" maxlength="200" value="${esc(t.interventor || '')}" placeholder="Ej.: Planta Física"></label>`;
+    const a = areaPorNombre(t.interventor);
+    const sel = a ? a.id : (t.interventor ? 'otra' : '');
+    const lista = a && !a.activo ? [...areasActivas(), a] : areasActivas();
+    const sis = a ? sistemasDe(a.id, t.sistema) : [];
+    const otroSis = sis.length && t.sistema && !sis.some((x) => x.nombre === t.sistema);
+    return `
+          <label>Área Uninorte que lo pide<select name="area_sel">
+            <option value="">Selecciona el área…</option>
+            ${lista.map((x) => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}
+            <option value="otra" ${sel === 'otra' ? 'selected' : ''}>Otra área</option>
+          </select></label>
+          <label class="area-otra" ${sel === 'otra' ? '' : 'hidden'}>¿Cuál área? <span class="req">*</span><input name="interventor_otra" maxlength="200" value="${sel === 'otra' ? esc(t.interventor) : ''}" placeholder="Ej.: Planta Física"></label>
+          <label class="campo-sistema" ${sis.length ? '' : 'hidden'}>Sistema <span class="req">*</span><select name="sistema_sel">${a ? opcionesSistema(a.id, t.sistema) : ''}</select></label>
+          <label class="sistema-otro" ${otroSis ? '' : 'hidden'}>¿Cuál sistema? <span class="req">*</span><input name="sistema_otro" maxlength="200" value="${otroSis ? esc(t.sistema) : ''}"></label>`;
+  }
+
+  function actualizarCamposArea(form, cambioArea) {
+    const sel = form.querySelector('[name="area_sel"]');
+    if (!sel) return;
+    const a = S.areas.find((x) => x.id === sel.value);
+    form.querySelector('.area-otra').hidden = sel.value !== 'otra';
+    const campo = form.querySelector('.campo-sistema');
+    const sSel = form.querySelector('[name="sistema_sel"]');
+    if (cambioArea) sSel.innerHTML = a ? opcionesSistema(a.id, '') : '';
+    campo.hidden = !(a && sistemasDe(a.id).length);
+    form.querySelector('.sistema-otro').hidden = campo.hidden || sSel.value !== 'otro';
+  }
+
   function formTrabajo(t = {}, publico = false) {
     const v = (k) => esc(t[k] ?? '');
     const riesgos = t.riesgos || [];
@@ -1231,7 +1405,7 @@
     const grupoPublico = publico ? `
       <div class="panel grupo-reg">
         <div class="grupo-reg-fila">
-          <label>Código de grupo <span class="ayuda">(opcional)</span><input name="grupo_codigo" maxlength="20" value="${v('grupo_codigo')}" placeholder="G-XXXXXXXX" autocomplete="off" spellcheck="false"></label>
+          <label>Código de grupo <span class="ayuda">(opcional)</span><input name="grupo_codigo" maxlength="30" value="${v('grupo_codigo')}" placeholder="Ej.: TECHOS-CARIBE" autocomplete="off" spellcheck="false"></label>
           <div class="grupo-estado" id="grupo-estado">${AYUDA_GRUPO}</div>
         </div>
       </div>` : '';
@@ -1252,7 +1426,7 @@
           <label>Responsable / supervisor <span class="req">*</span><input name="responsable" maxlength="200" value="${v('responsable')}"></label>
           <label>Teléfono ${publico ? '<span class="req">*</span>' : ''}<input name="telefono" maxlength="50" value="${v('telefono')}" inputmode="tel"></label>
           <label>Correo ${publico ? '<span class="req">*</span>' : ''}<input name="correo" type="email" maxlength="200" value="${v('correo')}"></label>
-          <label>Área o funcionario Uninorte que lo pide<input name="interventor" maxlength="200" value="${v('interventor')}" placeholder="Ej.: Planta Física"></label>
+          ${camposArea(t)}
           <label>Correo del funcionario Uninorte <span class="ayuda">(opcional, recibe copia de los avisos)</span><input name="interventor_correo" type="email" maxlength="200" value="${v('interventor_correo')}" placeholder="nombre@uninorte.edu.co"></label>
           <label>N.º de trabajadores<input name="num_trabajadores" type="number" min="1" max="500" value="${v('num_trabajadores')}"></label>
           <label>Lugar del trabajo <span class="req">*</span><input name="lugar" maxlength="200" value="${v('lugar')}" placeholder="Bloque, piso, área…"></label>
@@ -1288,6 +1462,18 @@
     const o = {};
     for (const [k, val] of fd.entries()) if (k !== 'riesgos') o[k] = typeof val === 'string' ? val.trim() : val;
     o.riesgos = fd.getAll('riesgos');
+    if ('area_sel' in o) {
+      const a = S.areas.find((x) => x.id === o.area_sel);
+      o.interventor = a ? a.nombre : (o.area_sel === 'otra' ? o.interventor_otra || '' : '');
+      const campo = form.querySelector('.campo-sistema');
+      const visible = !!(campo && !campo.hidden);
+      const si = S.sistemas.find((x) => x.id === o.sistema_sel);
+      o.sistema = !visible ? '' : si ? si.nombre : (o.sistema_sel === 'otro' ? o.sistema_otro || '' : '');
+      o._areaOtra = o.area_sel === 'otra';
+      o._sistemaRequerido = visible;
+      o._sistemaOtro = o.sistema_sel === 'otro';
+      ['area_sel', 'interventor_otra', 'sistema_sel', 'sistema_otro'].forEach((k) => delete o[k]);
+    }
     return o;
   }
 
@@ -1295,6 +1481,8 @@
     const req = ['titulo', 'empresa', 'responsable', ...(publico ? ['telefono', 'correo'] : []), 'lugar', 'fecha_inicio', 'fecha_fin'];
     const faltan = req.filter((k) => !o[k]);
     if (faltan.length) return { msg: `Te falta ${listaY(faltan.map((k) => NOMBRES_CAMPO[k]))}.`, campos: faltan };
+    if (o._areaOtra && !o.interventor) return { msg: 'Escribe cuál área pide el trabajo.', campos: ['interventor_otra'] };
+    if (o._sistemaRequerido && !o.sistema) return { msg: 'Indica el sistema del trabajo.', campos: [o._sistemaOtro ? 'sistema_otro' : 'sistema_sel'] };
     if (o.correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.correo)) return { msg: 'El correo no parece válido.', campos: ['correo'] };
     if (o.interventor_correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.interventor_correo)) return { msg: 'El correo del funcionario Uninorte no parece válido.', campos: ['interventor_correo'] };
     if (o.fecha_fin < o.fecha_inicio) return { msg: 'La fecha de finalización no puede ser anterior a la de inicio.', campos: ['fecha_fin'] };
@@ -1393,14 +1581,14 @@
     const inp = form.querySelector('[name="grupo_codigo"]');
     const est = $('#grupo-estado', form);
     if (!inp || !est) return true;
-    const c = inp.value.trim().toUpperCase();
+    const c = normalizarCodigo(inp.value);
     inp.value = c;
     if (!c) { est.className = 'grupo-estado'; est.textContent = AYUDA_GRUPO; S.grupoValido = ''; return true; }
     if (c === S.grupoValido) return true;
     est.className = 'grupo-estado'; est.textContent = 'Buscando el grupo…';
     let g = null;
     try { g = await S.api.infoGrupo(c); } catch (e) { console.error(e); }
-    if (inp.value.trim().toUpperCase() !== c) return false;   // lo cambiaron mientras buscaba
+    if (normalizarCodigo(inp.value) !== c) return false;   // lo cambiaron mientras buscaba
     if (!g) {
       S.grupoValido = '';
       est.className = 'grupo-estado mal';
@@ -1425,7 +1613,7 @@
     let detalle = '';
     const G = S.grupoConsulta;
     const volver = G && G.grupo ? `<button class="btn mini fantasma volver-grupo" data-acc="volver-grupo">← Volver a los trabajos de ${esc(G.grupo.nombre)}</button>` : '';
-    if (c === false) detalle = volver + '<div class="empty" style="margin-top:16px"><span class="big">🔎</span><strong>No encontramos ese código</strong>Revisa que esté bien escrito: el código de un trabajo tiene 10 caracteres entre letras y números, y el de un grupo empieza por G-.</div>';
+    if (c === false) detalle = volver + '<div class="empty" style="margin-top:16px"><span class="big">🔎</span><strong>No encontramos ese código</strong>Revisa que esté bien escrito: el código de un trabajo es una palabra con números (por ejemplo PINTURA-4821) y el de un grupo es el que te dio el equipo de SST.</div>';
     else if (!c && G === false) detalle = '<div class="empty" style="margin-top:16px"><span class="big">🔎</span><strong>No encontramos ese grupo</strong>Revisa el código con el equipo de SST. Si el grupo fue desactivado, ya no muestra trabajos.</div>';
     else if (!c && G && G.grupo) detalle = vistaGrupoPublico(G);
     if (c && c.trabajo) {
@@ -1455,9 +1643,9 @@
     }
     $('#vista').innerHTML = `
       <div class="estrecho">
-        <div class="hero"><h1>Consultar <em>trabajo</em></h1><p>Escribe el código que recibiste al registrar el trabajo. Si tu empresa tiene <b>código de grupo</b> (empieza por G-), escríbelo para ver todos tus trabajos juntos.</p></div>
+        <div class="hero"><h1>Consultar <em>trabajo</em></h1><p>Escribe el código que recibiste al registrar el trabajo. Si tu empresa tiene <b>código de grupo</b>, escríbelo para ver todos tus trabajos juntos.</p></div>
         <form class="panel" id="form-consulta" style="display:flex;gap:10px;flex-wrap:wrap">
-          <input id="c-codigo" placeholder="Código del trabajo o del grupo" maxlength="20" value="${esc(S.codigoConsulta)}" style="flex:1;min-width:200px;text-transform:uppercase;font-family:var(--f-data);letter-spacing:2px;font-size:17px">
+          <input id="c-codigo" placeholder="Código del trabajo o del grupo" maxlength="40" value="${esc(S.codigoConsulta)}" style="flex:1;min-width:200px;text-transform:uppercase;font-family:var(--f-data);letter-spacing:2px;font-size:17px">
           <button class="btn primary" type="submit">Consultar</button>
         </form>
         ${detalle}
@@ -1465,18 +1653,24 @@
   }
 
   async function consultar(codigo) {
-    const c = String(codigo || '').trim().toUpperCase();
+    const c = normalizarCodigo(codigo) || String(codigo || '').trim().toUpperCase();
     if (!c) return;
     S.codigoConsulta = c;
+    const verGrupo = async () => {
+      const g = await S.api.consultarGrupo(c);
+      if (!(g && g.grupo)) return false;
+      S.consulta = null; S.grupoConsulta = g; guardarLS('sst-grupo', c);
+      return true;
+    };
     if (esCodigoGrupo(c)) {
-      const r = await S.api.consultarGrupo(c);
-      S.consulta = null;
-      S.grupoConsulta = r && r.grupo ? r : false;
-      if (S.grupoConsulta) guardarLS('sst-grupo', c);
+      if (!(await verGrupo())) { S.consulta = null; S.grupoConsulta = false; }
       return;
     }
     const r = await S.api.consultar(c);
-    S.consulta = r && r.trabajo ? r : false;
+    if (r && r.trabajo) { S.consulta = r; return; }
+    // No es un trabajo: puede ser el código (o el nombre) de un grupo
+    if (await verGrupo()) return;
+    S.consulta = false;
   }
 
   // Si este equipo recuerda un grupo, al entrar a Consultar se muestran sus trabajos
@@ -1654,6 +1848,18 @@
     return !!(x && y && (x.includes(y) || y.includes(x)));
   }
 
+  // Código sugerido a partir del nombre (TECHOS-CARIBE), sin repetir uno existente
+  function sugerirCodigo(nombre, excluirId) {
+    let base = normalizarCodigo(claveEmpresa(nombre)) || normalizarCodigo(nombre);
+    if (!base) return '';
+    if (base.length < 3) base = `GRUPO-${base}`;
+    base = base.slice(0, 26).replace(/-+$/, '');
+    const usado = (c) => S.grupos.some((x) => x.codigo === c && x.id !== excluirId) || S.trabajos.some((t) => t.codigo === c);
+    let c = base, n = 2;
+    while (usado(c)) c = `${base}-${n++}`;
+    return c;
+  }
+
   function textoGrupo(g) {
     return `Buen día${g.contacto ? ', ' + g.contacto : ''}:\n\nEl área de Seguridad y Salud en el Trabajo de la Universidad del Norte creó un código de grupo para ${g.nombre}:\n\n${g.codigo}\n\nCon este código puede:\n- Ver todos sus trabajos y los documentos pendientes en un solo lugar: ${enlaceGrupo(g.codigo)}\n- Registrar trabajos nuevos escribiendo el código en el formulario, para que queden en su lista.\n\nSi alguna vez registra un trabajo sin el código, también puede hacerlo; solo que no aparecerá en la lista del grupo.\n\nCordialmente,\nEquipo de Seguridad y Salud en el Trabajo\nUniversidad del Norte`;
   }
@@ -1716,11 +1922,15 @@
     const miembros = candidatos.filter((x) => x.m).length;
     S.formAbierto = true;
     abrirBoard(`
-      ${cabeceraBoard(editar ? esc(g.nombre) : 'Nuevo grupo', editar ? `Código ${esc(g.codigo)} · ${plural(miembros, 'trabajo', 'trabajos')}` : 'Se generará un código que empieza por G- para enviárselo al contratista.')}
+      ${cabeceraBoard(editar ? esc(g.nombre) : 'Nuevo grupo', editar ? `Código ${esc(g.codigo)} · ${plural(miembros, 'trabajo', 'trabajos')}` : 'Ponle un código fácil de recordar para enviárselo al contratista.')}
       <form id="form-grupo" novalidate style="display:contents" data-id="${editar ? g.id : ''}">
         <div class="board-body">
           <div class="caja"><h3>Datos del grupo</h3><div class="rejilla">
             <label class="ancho-total">Nombre del grupo <span class="req">*</span><input name="nombre" maxlength="200" value="${esc(v.nombre)}" placeholder="Ej.: Techos del Caribe S.A.S."></label>
+            <label class="ancho-total">Código del grupo <span class="ayuda">(con él consultan sus trabajos)</span><input name="codigo" class="input-codigo" maxlength="30" value="${editar ? esc(g.codigo) : ''}" placeholder="${editar ? '' : esc(sugerirCodigo(v.nombre) || 'Ej.: TECHOS-CARIBE')}" autocomplete="off" spellcheck="false"></label>
+            <p class="ayuda ancho-total g-cod-ayuda" id="g-cod-ayuda">${editar
+              ? 'Puedes cambiarlo por uno más fácil (letras, números y guiones). Si lo cambias, el código anterior deja de funcionar: envíale el nuevo al contratista.'
+              : `Escribe un código fácil de recordar, por ejemplo el nombre de la empresa (letras, números y guiones). Si lo dejas vacío se usa <b id="g-cod-sug">${esc(sugerirCodigo(v.nombre) || 'uno a partir del nombre')}</b>.`}</p>
             <label>Persona de contacto<input name="contacto" maxlength="200" value="${esc(v.contacto || '')}"></label>
             <label>Correo<input name="correo" type="email" maxlength="200" value="${esc(v.correo || '')}"></label>
             <label>Teléfono<input name="telefono" maxlength="50" inputmode="tel" value="${esc(v.telefono || '')}"></label>
@@ -1820,8 +2030,11 @@
   function renderRequisitos() {
     $('#vista').innerHTML = `
       <div class="estrecho">
-        <div class="hero"><h1>Requisitos <em>por riesgo</em></h1>
-          <p>Los documentos que la página pide automáticamente según los riesgos de cada trabajo. Si un trabajo combina varios riesgos, se suman los de cada uno.</p></div>
+        <div class="hero"><h1>Ajustes del <em>registro</em></h1>
+          <p>Las áreas y sistemas que aparecen en el formulario de registro, y los documentos que la página pide según los riesgos de cada trabajo.</p></div>
+        ${panelAreas()}
+        <h2 class="ajustes-tit">Documentos requeridos por riesgo</h2>
+        <p class="ayuda" style="margin:-4px 0 14px">Se piden automáticamente según los riesgos de cada trabajo. Si un trabajo combina varios riesgos, se suman los de cada uno.</p>
         ${Object.entries(GRUPOS_REQ).map(([k, g], gi) => {
           const lista = S.requisitos.filter((q) => q.riesgo === k).sort((a, b) => (a.fase === b.fase ? 0 : a.fase === 'antes' ? -1 : 1) || a.orden - b.orden);
           return `<div class="panel req-grupo" style="animation-delay:${gi * 60}ms">
@@ -1838,6 +2051,39 @@
           </div>`;
         }).join('')}
       </div>`;
+  }
+
+  function panelAreas() {
+    const areas = [...S.areas].sort((a, b) => (b.activo - a.activo) || ordenar(a, b));
+    return `<div class="panel areas-panel">
+      <div class="req-grupo-cab"><h3><span class="mini-r" style="--rc:var(--rojo)">🏢</span>Áreas que solicitan y sus sistemas</h3>
+        <button class="btn mini" data-acc="nueva-area">+ Agregar área</button></div>
+      <p class="ayuda" style="margin:0 0 12px">Aparecen en el formulario como <b>Área Uninorte que lo pide</b>. Si un área tiene sistemas, al elegirla se pide el sistema (por ejemplo, Mantenimiento → Aire acondicionado). Quitar un sistema no cambia los trabajos ya registrados.</p>
+      ${areas.length ? areas.map((a) => {
+        const sis = S.sistemas.filter((x) => x.area_id === a.id).sort(ordenar);
+        return `<div class="area-item ${a.activo ? '' : 'off'}">
+          <div class="area-cab"><b>${esc(a.nombre)}</b>${a.activo ? '' : '<span class="chip-e">Desactivada</span>'}<span class="sp"></span>
+            <button class="btn mini fantasma" data-acc="editar-area" data-id="${a.id}">Renombrar</button>
+            <button class="btn mini fantasma" data-acc="toggle-area" data-id="${a.id}">${a.activo ? 'Desactivar' : 'Activar'}</button>
+            <button class="btn mini fantasma" data-acc="eliminar-area" data-id="${a.id}">Eliminar</button></div>
+          <div class="sis-lista">${sis.map((x) => `<span class="sis-chip">${esc(x.nombre)}<button type="button" data-acc="quitar-sistema" data-id="${x.id}" aria-label="Quitar ${esc(x.nombre)}" title="Quitar">×</button></span>`).join('') || '<span class="ayuda">Sin sistemas: al elegir esta área no se pide sistema.</span>'}</div>
+          <form class="sis-nuevo" data-area="${a.id}" novalidate><input name="sistema_nuevo" maxlength="120" placeholder="Agregar sistema (ej.: Plomería)" aria-label="Nuevo sistema para ${esc(a.nombre)}"><button class="btn mini primary" type="submit">Agregar</button></form>
+        </div>`;
+      }).join('') : '<p class="ayuda" style="margin:0">Todavía no hay áreas. Mientras no haya, el formulario muestra un campo de texto libre.</p>'}
+    </div>`;
+  }
+
+  function abrirFormArea(a) {
+    S.formAbierto = true;
+    abrirBoard(`
+      ${cabeceraBoard(a ? 'Renombrar área' : 'Nueva área', a ? 'Los trabajos ya registrados conservan el nombre anterior' : 'Área de la universidad que solicita trabajos')}
+      <form id="form-area" novalidate style="display:contents" data-id="${a ? a.id : ''}">
+        <div class="board-body"><div class="caja"><div class="rejilla">
+          <label class="ancho-total">Nombre del área <span class="req">*</span><input name="nombre" maxlength="120" value="${a ? esc(a.nombre) : ''}" placeholder="Ej.: Mantenimiento"></label>
+          ${a ? '' : '<label class="ancho-total">Sistemas <span class="ayuda">(opcional, uno por línea)</span><textarea name="sistemas" rows="5" placeholder="Aire acondicionado&#10;Pinturas&#10;Ventanas"></textarea></label>'}
+        </div></div><div class="err" id="form-err" hidden></div></div>
+        <div class="board-foot"><span class="sp"></span><button type="button" class="btn" data-acc="cerrar-board">Cancelar</button><button class="btn primary" type="submit">Guardar</button></div>
+      </form>`);
   }
 
   function abrirFormReq(q) {
@@ -1984,6 +2230,13 @@
 
     switch (acc) {
       case 'tab': irA(el.dataset.tab); break;
+      case 'ingresar': S.portada = false; irA('registrar'); break;
+      case 'portada-ir': S.portada = false; irA(el.dataset.p); break;
+      case 'ir-portada':
+        if (S.sesion) break;
+        S.portada = true; cerrarBoard(); render();
+        { const r = $('#portada-root .portada'); if (r) r.scrollTop = 0; }
+        break;
       case 'ingresar': irA(S.pestana === 'requisitos' ? 'requisitos' : 'calendario'); break;
       case 'salir':
         if (S.api.desuscribir) S.api.desuscribir();
@@ -2021,7 +2274,7 @@
       }
       case 'mini-mes': S.miniMes = sumarMeses(S.miniMes || S.fecha.slice(0, 7) + '-01', Number(el.dataset.n)); pintarSide(); break;
       case 'chip-sem': S.filtros.semaforo = S.filtros.semaforo === el.dataset.s ? '' : el.dataset.s; renderCalendario(); break;
-      case 'limpiar-filtros': Object.assign(S.filtros, { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', grupo: '' }); renderCalendario(); break;
+      case 'limpiar-filtros': Object.assign(S.filtros, { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', grupo: '', sistema: '' }); renderCalendario(); break;
       case 'csv': descargarCSV(); break;
       case 'detalle': abrirDetalle(el.dataset.id); break;
       case 'cerrar-board': cerrarBoard(); break;
@@ -2074,6 +2327,29 @@
         await conCarga(el, async () => { await S.api.guardarRequisito({ ...q, activo: !q.activo }); await refrescarTodo(); });
         break;
       }
+      case 'nueva-area': abrirFormArea(null); break;
+      case 'editar-area': abrirFormArea(S.areas.find((a) => a.id === el.dataset.id)); break;
+      case 'toggle-area': {
+        const a = S.areas.find((x) => x.id === el.dataset.id);
+        await conCarga(el, async () => { await S.api.guardarArea({ ...a, activo: !a.activo }); await refrescarTodo(); aviso(a.activo ? `Área “${a.nombre}” desactivada: ya no aparece en el formulario.` : `Área “${a.nombre}” activada.`, 'ok'); });
+        break;
+      }
+      case 'eliminar-area': {
+        const a = S.areas.find((x) => x.id === el.dataset.id);
+        const n = S.sistemas.filter((x) => x.area_id === a.id).length;
+        const ok = await confirmar('Eliminar área', `Se eliminará “${a.nombre}”${n ? ` y sus ${plural(n, 'sistema', 'sistemas')}` : ''}. Los trabajos ya registrados no cambian.`, 'Eliminar');
+        if (!ok) break;
+        await conCarga(null, async () => { await S.api.eliminarArea(a.id); await refrescarTodo(); aviso('Área eliminada.', 'ok'); });
+        break;
+      }
+      case 'quitar-sistema': {
+        const x = S.sistemas.find((y) => y.id === el.dataset.id);
+        const a = S.areas.find((y) => y.id === x.area_id);
+        const ok = await confirmar('Quitar sistema', `¿Quitar “${x.nombre}” de ${a ? a.nombre : 'esta área'}? Los trabajos ya registrados lo conservan.`, 'Quitar');
+        if (!ok) break;
+        await conCarga(null, async () => { await S.api.eliminarSistema(x.id); await refrescarTodo(); aviso('Sistema quitado.', 'ok'); });
+        break;
+      }
       case 'ver-pieza': abrirPieza(el.dataset.id); break;
       case 'copiar-pieza': {
         const url = enlacePieza(el.dataset.id);
@@ -2101,7 +2377,7 @@
       case 'editar-grupo': abrirFormGrupo(grupoDe(el.dataset.id)); break;
       case 'copiar-grupo': copiarEnlaceGrupo(el.dataset.codigo); break;
       case 'ver-grupo-cal':
-        Object.assign(S.filtros, { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', grupo: el.dataset.id, pendientes: false });
+        Object.assign(S.filtros, { texto: '', riesgo: '', semaforo: '', ejecutor: '', estado: '', sistema: '', grupo: el.dataset.id, pendientes: false });
         S.vista = 'lista'; irA('calendario'); break;
       case 'g-marcar-empresa': {
         const form = $('#form-grupo'); const nombre = form.querySelector('[name="nombre"]').value.trim();
@@ -2213,15 +2489,48 @@
       const marcados = new Set(new FormData(form).getAll('g_trabajos'));
       const id = form.dataset.id || null;
       const previo = id ? grupoDe(id) : null;
+      const codigo = o.codigo ? normalizarCodigo(o.codigo) : (previo ? previo.codigo : sugerirCodigo(o.nombre, id));
+      if (!codigoValido(codigo)) { mostrarErrores(form, { msg: 'El código debe tener de 3 a 30 caracteres: letras, números y guiones.', campos: ['codigo'] }); return; }
+      if (S.grupos.some((x) => x.codigo === codigo && x.id !== id)) { mostrarErrores(form, { msg: 'Ese código ya lo usa otro grupo. Escribe uno distinto.', campos: ['codigo'] }); return; }
+      if (S.trabajos.some((t) => t.codigo === codigo)) { mostrarErrores(form, { msg: 'Ese código ya lo usa un trabajo. Escribe uno distinto.', campos: ['codigo'] }); return; }
       await conCarga(boton, async () => {
-        const g = await S.api.guardarGrupo({ ...o, id, activo: previo ? previo.activo : true });
+        const g = await S.api.guardarGrupo({ ...o, codigo, id, activo: previo ? previo.activo : true });
         const actuales = S.trabajos.filter((t) => t.grupo_id === g.id).map((t) => t.id);
         const agregar = [...marcados].filter((x) => !actuales.includes(x));
         const quitar = actuales.filter((x) => !marcados.has(x));
         if (agregar.length || quitar.length) await S.api.asignarGrupo(g.id, agregar, quitar);
         S.formAbierto = false; cerrarBoard(); await refrescarTodo();
-        if (id) aviso('Grupo actualizado.', 'ok');
+        if (id) aviso(previo && previo.codigo !== g.codigo ? `Grupo actualizado. Su nuevo código es ${g.codigo}.` : 'Grupo actualizado.', 'ok');
         else avisoAccion(`Grupo creado. Su código es ${g.codigo}`, 'Copiar enlace', () => copiarEnlaceGrupo(g.codigo), 12000);
+      });
+    }
+
+    if (form.id === 'form-area') {
+      const o = leerForm(form);
+      if (!o.nombre) { mostrarErrores(form, { msg: 'Escribe el nombre del área.', campos: ['nombre'] }); return; }
+      const id = form.dataset.id || null;
+      const previo = id ? S.areas.find((a) => a.id === id) : null;
+      await conCarga(boton, async () => {
+        const a = await S.api.guardarArea({ ...(previo || {}), id, nombre: o.nombre, orden: previo ? previo.orden : S.areas.length + 1 });
+        const nuevos = [...new Set(String(o.sistemas || '').split('\n').map((x) => x.trim()).filter(Boolean))];
+        for (let i = 0; i < nuevos.length; i++) await S.api.guardarSistema({ area_id: a.id, nombre: nuevos[i], orden: i + 1 });
+        S.formAbierto = false; cerrarBoard(); await refrescarTodo();
+        aviso(id ? 'Área renombrada.' : `Área “${a.nombre}” creada${nuevos.length ? ` con ${plural(nuevos.length, 'sistema', 'sistemas')}` : ''}.`, 'ok');
+      });
+    }
+
+    if (form.classList.contains('sis-nuevo')) {
+      const inp = form.querySelector('[name="sistema_nuevo"]');
+      const nombre = inp.value.trim();
+      const areaId = form.dataset.area;
+      if (!nombre) { inp.focus(); return; }
+      if (S.sistemas.some((x) => x.area_id === areaId && x.nombre.toLowerCase() === nombre.toLowerCase())) { aviso('Esa área ya tiene un sistema con ese nombre.', 'error'); return; }
+      const orden = Math.max(0, ...S.sistemas.filter((x) => x.area_id === areaId).map((x) => x.orden || 0)) + 1;
+      await conCarga(boton, async () => {
+        await S.api.guardarSistema({ area_id: areaId, nombre, orden });
+        await refrescarTodo();
+        aviso(`Sistema “${nombre}” agregado.`, 'ok');
+        const nuevo = $(`form.sis-nuevo[data-area="${areaId}"] input`); if (nuevo) nuevo.focus();
       });
     }
 
@@ -2239,15 +2548,18 @@
     const t = e.target;
     if (t.id === 'archivo-oculto') { procesarArchivo(t.files[0]); return; }
     if (t.name === 'g_trabajos') { contarMarcados(); return; }
+    if (t.name === 'codigo' && t.closest('#form-grupo')) { t.value = normalizarCodigo(t.value); return; }
     if (t.name === 'pz_check') { contarChecks(); return; }
     const form = t.closest('#form-sst, #form-ext');
     if (form && t.name === 'grupo_codigo') { validarGrupoCampo(form, true); return; }
+    if (form && t.name === 'area_sel') { actualizarCamposArea(form, true); return; }
+    if (form && t.name === 'sistema_sel') { actualizarCamposArea(form, false); return; }
     if (form && (t.name === 'riesgos' || t.name === 'tipo_ejecutor')) pintarPrevia(form);
     if (form && t.name === 'fecha_inicio') {
       const fin = form.querySelector('[name="fecha_fin"]');
       if (!fin.value || fin.value < t.value) fin.value = t.value;
     }
-    const mapa = { 'f-riesgo': 'riesgo', 'f-ejecutor': 'ejecutor', 'f-estado': 'estado', 'f-grupo': 'grupo' };
+    const mapa = { 'f-riesgo': 'riesgo', 'f-ejecutor': 'ejecutor', 'f-estado': 'estado', 'f-grupo': 'grupo', 'f-sistema': 'sistema' };
     if (mapa[t.id]) { S.filtros[mapa[t.id]] = t.value; renderCalendario(); }
     if (t.id === 'f-pendientes') { S.filtros.pendientes = t.checked; pintarCuerpo(); }
   });
@@ -2256,6 +2568,13 @@
     if (e.target.id === 'f-texto') {
       const v = e.target.value;
       setTimeout(() => { if ($('#f-texto') && $('#f-texto').value === v) { S.filtros.texto = v; pintarCuerpo(); } }, 160);
+    }
+    if (e.target.name === 'nombre' && e.target.closest('#form-grupo')) {
+      const form = e.target.closest('#form-grupo');
+      const sug = sugerirCodigo(e.target.value, form.dataset.id || null);
+      const cod = form.querySelector('[name="codigo"]');
+      if (cod && !form.dataset.id) cod.placeholder = sug || 'Ej.: TECHOS-CARIBE';
+      const b = $('#g-cod-sug'); if (b) b.textContent = sug || 'uno a partir del nombre';
     }
     if (e.target.id === 'g-buscar') {
       const q = e.target.value.trim().toLowerCase();
@@ -2297,8 +2616,10 @@
      ------------------------------------------------------------------ */
   async function iniciar() {
     S.api = MODO_DEMO ? demoApi : sbApi;
-    render();
     const params = new URLSearchParams(location.search);
+    const enlaceDirecto = ['abrir', 'pieza', 'grupo', 'codigo'].some((k) => params.get(k));
+    S.portada = !enlaceDirecto && !MODO_DEMO;
+    render();
     try {
       await S.api.init();
       if (S.sesion) {
@@ -2319,6 +2640,7 @@
       return;
     }
     S.cargando = false;
+    if (S.sesion) S.portada = false;   // el equipo SST entra directo al calendario
     render();
     if (S.piezaTras) { const pz = S.piezaTras; S.piezaTras = ''; abrirPieza(pz); }
     if (S.sesion) { if (S.abrirTras) abrirPendiente(); else resumenNuevos(); }
