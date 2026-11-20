@@ -816,7 +816,6 @@
     ];
     return `<div class="portada" role="region" aria-label="Portada">
       <section class="pt-hero">
-        <div class="pt-fondo" aria-hidden="true"><i class="pt-foto"></i><i class="pt-velo"></i></div>
         <header class="pt-top">
           <span class="logo" role="img" aria-label="Universidad del Norte"></span>
           <span class="pt-unidad"><b>Seguridad y Salud en el Trabajo</b>Universidad del Norte</span>
