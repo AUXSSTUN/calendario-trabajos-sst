@@ -132,6 +132,7 @@
     grupoRegistro: null,  // grupo con el que se abre el formulario de registro
     grupoValido: '',      // código de grupo ya verificado en el registro
     abrirTras: '',        // código de trabajo para abrir después de ingresar
+    docTab: 'induccion',  // apartado abierto en Documentos de consulta
     cargando: true
   };
   const grupoDe = (id) => (id ? S.grupos.find((g) => g.id === id) : null);
@@ -141,6 +142,10 @@
   const piezaDe = (id) => PIEZAS.find((p) => p.id === id);
   const piezasPara = (t) => PIEZAS.filter((p) => p.general || (p.riesgos || []).some((r) => (t.riesgos || []).includes(r)));
   const enlacePieza = (id) => `${urlBase()}?pieza=${encodeURIComponent(id)}`;
+  // Documentos de consulta (contenido en documentos.js)
+  const DOCS = window.DOCUMENTOS || {};
+  const DOC_TABS = ['induccion', 'lineamientos', 'piezas'];
+  const enlaceDoc = (d) => `${urlBase()}?doc=${encodeURIComponent(d)}`;
   // Texto con **negrita** (escapado antes)
   const conNegrita = (txt) => esc(txt).replace(/\\\*/g, '&#42;').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
 
@@ -807,7 +812,7 @@
     const accesos = [
       ['registrar', '📝', 'Registrar un trabajo', 'Contratistas y funcionarios'],
       ['consultar', '🔎', 'Consultar con código', 'Sube y revisa tus documentos'],
-      ['piezas', '📘', 'Piezas de seguridad', 'Guías y recomendaciones SST']
+      ['piezas', '📘', 'Documentos de consulta', 'Guías y recomendaciones técnicas SST']
     ];
     return `<div class="portada" role="region" aria-label="Portada">
       <section class="pt-hero">
@@ -820,7 +825,7 @@
         </header>
         <div class="pt-hero-in">
           <span class="pt-eyebrow">SG-SST · Trabajos de contratistas y funcionarios</span>
-          <h1>Registro y control de <em>trabajos</em> en el campus</h1>
+          <h1>Registro de control operacional de <em>tareas de riesgo</em></h1>
           <p class="pt-lead">Aquí podrás registrar los trabajos que vas a realizar en la Universidad del Norte, enviar los documentos de Seguridad y Salud en el Trabajo y consultar su estado en cualquier momento.</p>
           <div class="pt-cta">
             <button class="pt-ingresar" data-acc="ingresar">Ingresar <span aria-hidden="true">→</span></button>
@@ -901,7 +906,7 @@
         ['inicio', 'Inicio', 'Portada de la página'],
         ['registrar', 'Registrar un trabajo', 'Contratistas y funcionarios'],
         ['consultar', 'Consultar con código', 'Subir y revisar documentos'],
-        ['piezas', 'Piezas de seguridad', 'Guías y recomendaciones SST'],
+        ['piezas', 'Documentos de consulta', 'Guías y recomendaciones técnicas SST'],
         ['calendario', 'Ingreso equipo SST', 'Calendario y revisión']
       ].map(([t, a, b], i) => `<li style="--i:${i}"><button ${t === 'inicio' ? 'data-acc="ir-portada"' : `data-acc="tab" data-tab="${t}" aria-current="${S.pestana === t}"`}>${a}<small>${b}</small></button></li>`).join('');
       pie.innerHTML = '<div>¿Tienes dudas sobre los documentos o el registro? Escríbenos a:<br><a href="mailto:aglopez@uninorte.edu.co" style="color:#fff;font-weight:700">aglopez@uninorte.edu.co</a><br><a href="mailto:aux_sst@uninorte.edu.co" style="color:#fff;font-weight:700">aux_sst@uninorte.edu.co</a></div>'; pie.style.display = 'grid';
@@ -913,8 +918,8 @@
   function pintarSecciones() {
     const oscuro = document.documentElement.getAttribute('data-theme') === 'dark';
     const items = S.sesion
-      ? [['calendario', 'Calendario'], ['registrar', 'Registrar'], ['consultar', 'Consultar'], ['grupos', 'Grupos'], ['requisitos', 'Ajustes'], ['piezas', 'Piezas']]
-      : [['registrar', 'Registrar trabajo'], ['consultar', 'Consultar con código'], ['piezas', 'Piezas SST']];
+      ? [['calendario', 'Calendario'], ['registrar', 'Registrar'], ['consultar', 'Consultar'], ['grupos', 'Grupos'], ['requisitos', 'Ajustes'], ['piezas', 'Documentos']]
+      : [['registrar', 'Registrar trabajo'], ['consultar', 'Consultar con código'], ['piezas', 'Documentos de consulta']];
     $('#secciones').innerHTML = items.map(([t, l]) => `<button data-acc="tab" data-tab="${t}" aria-current="${S.pestana === t}">${l}</button>`).join('')
       + '<span class="sep"></span>'
       + (S.sesion
@@ -1747,10 +1752,143 @@
   }
 
   function renderPiezas() {
+    const ind = DOCS.induccion, lin = DOCS.lineamientos;
+    const tabs = [
+      ind && ['induccion', '🎓', `Inducción SST ${ind.anio}`, 'Obligatoria para ingresar al campus'],
+      lin && ['lineamientos', '📋', 'Lineamientos SST', 'Para proveedores y contratistas'],
+      ['piezas', '📘', 'Piezas de seguridad', PIEZAS.length ? plural(PIEZAS.length, 'pieza', 'piezas') : 'Material del SG-SST']
+    ].filter(Boolean);
+    if (!tabs.some((t) => t[0] === S.docTab)) S.docTab = tabs[0][0];
+    const cuerpo = S.docTab === 'induccion' ? induccionHTML(ind)
+      : S.docTab === 'lineamientos' ? lineamientosHTML(lin)
+      : piezasHTML();
     $('#vista').innerHTML = `
-      <div class="estrecho">
-        <div class="hero"><h1>Piezas de <em>seguridad</em></h1>
-          <p>Material del Sistema de Gestión de Seguridad y Salud en el Trabajo de la Universidad del Norte. Léelo antes de hacer un trabajo: cada pieza tiene sus especificaciones, recomendaciones y una lista de chequeo para revisar con tu equipo.</p></div>
+      <div class="estrecho doc-pagina">
+        <div class="hero"><h1>Documentos de <em>consulta</em></h1>
+          <p>Guías y recomendaciones técnicas de Seguridad y Salud en el Trabajo de la Universidad del Norte. Revísalas antes de iniciar un trabajo en el campus.</p></div>
+        <div class="doc-tabs" role="tablist" aria-label="Apartados">${tabs.map(([id, ico, t, d], i) => `
+          <button role="tab" class="doc-tab" style="--i:${i}" aria-selected="${S.docTab === id}" data-acc="doc-tab" data-d="${id}"><span class="ico" aria-hidden="true">${ico}</span><b>${t}</b><small>${d}</small></button>`).join('')}
+        </div>
+        <div class="doc-panel" role="tabpanel">${cuerpo}</div>
+      </div>`;
+    if (S.docTab === 'lineamientos') {
+      const idx = $('.ln-indice');
+      if (idx && window.innerWidth > 980) idx.open = true;
+    }
+  }
+
+  function induccionHTML(d) {
+    const compartir = encodeURIComponent(`Inducción de SST para contratistas (obligatoria para ingresar al campus) · Universidad del Norte: ${enlaceDoc('induccion')}`);
+    // En celulares y tabletas el PDF incrustado suele verse en blanco: se ofrece abrirlo
+    const sinVisor = navigator.pdfViewerEnabled === false || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
+    const visor = sinVisor
+      ? `<a class="ind-sin-visor" href="${esc(d.archivo)}" target="_blank" rel="noopener"><span aria-hidden="true">📄</span><b>Ver la pieza completa</b><p>Se abre el PDF de la inducción ${d.anio} en otra pestaña.</p></a>`
+      : `<iframe class="ind-marco" src="${esc(d.archivo)}#view=FitH&navpanes=0&toolbar=0" title="${esc(d.titulo)}" loading="lazy"></iframe>`;
+    return `<div class="ind">
+      <div class="ind-info">
+        <div class="ind-cab"><span class="ind-badge">Obligatoria</span>
+          <h2>${esc(d.titulo)}</h2>
+          <p>${esc(d.obligatoria)} Sigue estos pasos para realizarla correctamente:</p></div>
+        <ol class="ind-pasos">${d.pasos.map((p, i) => `
+          <li style="--i:${i}"><span class="n">${i + 1}</span><div><b>${esc(p.titulo)}</b><span>${conNegrita(p.texto)}</span>
+            ${p.enlace ? `<a class="btn mini primary" href="${esc(p.enlace.url)}" target="_blank" rel="noopener">${esc(p.enlace.texto)} <span aria-hidden="true">↗</span></a>` : ''}</div></li>`).join('')}
+        </ol>
+        <div class="ind-vigencia"><span aria-hidden="true">⏳</span><span>${conNegrita(d.vigencia)}</span></div>
+        ${DOCS.lineamientos ? `<p class="ind-ref">Así lo pide el numeral 5.2 de los lineamientos de SST para proveedores y contratistas. <button class="link" data-acc="ln-ir" data-id="ln-5-2">Leer el numeral</button></p>` : ''}
+        <div class="codigo-caja">
+          <button class="btn mini" data-acc="copiar-doc" data-d="induccion">Copiar enlace</button>
+          <a class="btn mini" target="_blank" rel="noopener" href="https://wa.me/?text=${compartir}">Enviar por WhatsApp</a>
+        </div>
+      </div>
+      <div class="caja ind-pdf">
+        <h3>📄 Pieza de la inducción ${d.anio}</h3>
+        ${visor}
+        <div class="codigo-caja"><a class="btn mini primary" href="${esc(d.archivo)}" target="_blank" rel="noopener">Abrir PDF</a><a class="btn mini" href="${esc(d.archivo)}" download>Descargar</a></div>
+      </div>
+    </div>`;
+  }
+
+  function lineamientosHTML(d) {
+    return `<div class="ln">
+      <div class="caja ln-cab">
+        <div class="fila"><span class="chip-e">COD: ${esc(d.codigo)}</span><span class="chip-e">Versión ${esc(d.version)}</span><span class="chip-e">${esc(d.fecha)}</span><span class="chip-e">${esc(d.macroproceso)}</span></div>
+        <h2>${esc(d.titulo)}</h2>
+        <p>${esc(d.resumen)}</p>
+        <div class="codigo-caja">
+          <a class="btn mini primary" href="${esc(d.archivo)}" download>Descargar documento (Word)</a>
+          <button class="btn mini" data-acc="copiar-doc" data-d="lineamientos">Copiar enlace</button>
+        </div>
+      </div>
+      <div class="ln-doc">
+        <details class="caja ln-indice"><summary>Contenido</summary>
+          <ol>${d.secciones.map((s) => `<li><button class="ln-ir" data-acc="ln-ir" data-id="${s.id}"><span>${s.num}</span>${esc(s.titulo)}</button>
+            ${s.subs.length ? `<ol>${s.subs.map((x) => `<li><button class="ln-ir sub" data-acc="ln-ir" data-id="${x.id}"><span>${x.num}</span>${esc(x.titulo)}</button></li>`).join('')}</ol>` : ''}</li>`).join('')}
+          </ol>
+        </details>
+        <div class="ln-cuerpo">
+          <div class="ln-buscar" role="search"><span aria-hidden="true">🔎</span><input id="ln-buscar" type="search" autocomplete="off" placeholder="Buscar en los lineamientos (alturas, ARL, extintor…)" aria-label="Buscar en los lineamientos"><small id="ln-res" aria-live="polite"></small></div>
+          ${d.secciones.map((s) => `<section class="caja ln-sec" id="${s.id}"><h3><span class="ln-num">${s.num}</span>${esc(s.titulo)}</h3><div class="ln-html">${s.html}</div></section>`).join('')}
+          <p class="ayuda ln-pie">Texto tomado del documento ${esc(d.codigo)} versión ${esc(d.version)}. Ante cualquier diferencia, prevalece el documento descargable.</p>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Busca en los lineamientos: deja visibles las secciones con resultados y resalta el texto
+  function buscarLineamientos(q) {
+    const cuerpo = $('.ln-cuerpo');
+    if (!cuerpo) return;
+    $$('mark.ln-m', cuerpo).forEach((m) => m.replaceWith(document.createTextNode(m.textContent)));
+    cuerpo.normalize();
+    const norm = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const nq = norm(q.trim());
+    const res = $('#ln-res');
+    let total = 0, secs = 0;
+    $$('.ln-sec', cuerpo).forEach((sec) => {
+      if (nq.length < 2) { sec.hidden = false; return; }
+      const nodos = [];
+      const w = document.createTreeWalker(sec, NodeFilter.SHOW_TEXT);
+      while (w.nextNode()) nodos.push(w.currentNode);
+      let n = 0;
+      nodos.forEach((nodo) => {
+        const t = nodo.nodeValue, nt = norm(t);
+        if (nt.length !== t.length) { if (nt.includes(nq)) n++; return; }
+        let i = nt.indexOf(nq);
+        if (i < 0) return;
+        const frag = document.createDocumentFragment();
+        let pos = 0;
+        while (i >= 0) {
+          frag.append(t.slice(pos, i));
+          const m = document.createElement('mark');
+          m.className = 'ln-m'; m.textContent = t.slice(i, i + nq.length);
+          frag.append(m); n++;
+          pos = i + nq.length; i = nt.indexOf(nq, pos);
+        }
+        frag.append(t.slice(pos));
+        nodo.replaceWith(frag);
+      });
+      sec.hidden = !n; total += n; if (n) secs++;
+    });
+    if (res) res.textContent = nq.length < 2 ? '' : total ? `${plural(total, 'resultado', 'resultados')} en ${plural(secs, 'sección', 'secciones')}` : 'Sin resultados';
+  }
+
+  function irALineamiento(id) {
+    if (S.pestana !== 'piezas' || S.docTab !== 'lineamientos') {
+      S.docTab = 'lineamientos';
+      if (S.pestana !== 'piezas') { irA('piezas'); } else renderPiezas();
+    }
+    const inp = $('#ln-buscar');
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.closest('.ln-sec') && el.closest('.ln-sec').hidden && inp) { inp.value = ''; buscarLineamientos(''); }
+    el.classList.remove('ln-destacar'); void el.offsetWidth; el.classList.add('ln-destacar');
+    requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    if (window.innerWidth <= 980) { const idx = $('.ln-indice'); if (idx) idx.open = false; }
+  }
+
+  function piezasHTML() {
+    return `
+        <p class="doc-intro">Material del Sistema de Gestión de Seguridad y Salud en el Trabajo. Cada pieza tiene sus especificaciones, recomendaciones y una lista de chequeo para revisar con tu equipo antes de hacer el trabajo.</p>
         ${PIEZAS.length ? `<div class="pz-grid">${PIEZAS.map((p, i) => `
           <article class="pz-card" style="--i:${i}">
             <button class="pz-abrir" data-acc="ver-pieza" data-id="${p.id}" aria-label="Ver la pieza ${esc(p.titulo)}">${portadaPieza(p)}</button>
@@ -1765,8 +1903,7 @@
             </div>
           </article>`).join('')}</div>`
           : '<div class="empty"><span class="big">📘</span><strong>Todavía no hay piezas</strong>Pronto encontrarás aquí el material de seguridad.</div>'}
-        <div style="margin-top:18px">${contactosPiezaHTML()}</div>
-      </div>`;
+        <div style="margin-top:18px">${contactosPiezaHTML()}</div>`;
   }
 
   function seccionPieza(sec) {
@@ -2345,6 +2482,18 @@
         break;
       }
       case 'ver-pieza': abrirPieza(el.dataset.id); break;
+      case 'doc-tab':
+        if (S.docTab === el.dataset.d) break;
+        S.docTab = el.dataset.d;
+        try { history.replaceState(null, '', location.pathname); } catch { /* visor sin historial */ }
+        renderPiezas();
+        break;
+      case 'ln-ir': irALineamiento(el.dataset.id); break;
+      case 'copiar-doc': {
+        const url = enlaceDoc(el.dataset.d);
+        try { await navigator.clipboard.writeText(url); aviso('Enlace copiado.', 'ok'); } catch { aviso(url); }
+        break;
+      }
       case 'copiar-pieza': {
         const url = enlacePieza(el.dataset.id);
         try { await navigator.clipboard.writeText(url); aviso('Enlace de la pieza copiado.', 'ok'); } catch { aviso(url); }
@@ -2559,6 +2708,10 @@
   });
 
   document.addEventListener('input', (e) => {
+    if (e.target.id === 'ln-buscar') {
+      const v = e.target.value;
+      setTimeout(() => { if ($('#ln-buscar') && $('#ln-buscar').value === v) buscarLineamientos(v); }, 180);
+    }
     if (e.target.id === 'f-texto') {
       const v = e.target.value;
       setTimeout(() => { if ($('#f-texto') && $('#f-texto').value === v) { S.filtros.texto = v; pintarCuerpo(); } }, 160);
@@ -2589,7 +2742,7 @@
   }, true);
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target.id === 'g-buscar') { e.preventDefault(); return; }
+    if (e.key === 'Enter' && (e.target.id === 'g-buscar' || e.target.id === 'ln-buscar')) { e.preventDefault(); return; }
     if (e.key === 'Escape') {
       if ($('#confirm-root').innerHTML) return cerrarConfirm(false);
       if (S.menuAnio) { S.menuAnio = false; pintarRail(); return; }
@@ -2611,7 +2764,7 @@
   async function iniciar() {
     S.api = MODO_DEMO ? demoApi : sbApi;
     const params = new URLSearchParams(location.search);
-    const enlaceDirecto = ['abrir', 'pieza', 'grupo', 'codigo'].some((k) => params.get(k));
+    const enlaceDirecto = ['abrir', 'pieza', 'doc', 'grupo', 'codigo'].some((k) => params.get(k));
     S.portada = !enlaceDirecto && !MODO_DEMO;
     render();
     try {
@@ -2622,7 +2775,8 @@
       } else await S.api.cargarRequisitosPublicos();
       S.abrirTras = String(params.get('abrir') || '').trim().toUpperCase();
       if (S.abrirTras) S.pestana = 'calendario';
-      else if (params.get('pieza')) { S.pestana = 'piezas'; S.piezaTras = params.get('pieza'); }
+      else if (params.get('pieza')) { S.pestana = 'piezas'; S.docTab = 'piezas'; S.piezaTras = params.get('pieza'); }
+      else if (params.get('doc')) { S.pestana = 'piezas'; if (DOC_TABS.includes(params.get('doc'))) S.docTab = params.get('doc'); }
       else if (params.get('grupo')) { S.pestana = 'consultar'; await consultar(params.get('grupo')); }
       else if (params.get('codigo')) { S.pestana = 'consultar'; await consultar(params.get('codigo')); }
       else S.pestana = S.sesion ? 'calendario' : 'registrar';
