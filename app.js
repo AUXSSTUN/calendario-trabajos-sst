@@ -804,7 +804,6 @@
      Render general: riel, secciones y vista
      ------------------------------------------------------------------ */
   function portadaHTML() {
-    const generales = S.requisitos.filter((q) => q.activo !== false && q.riesgo === 'general' && q.fase === 'antes').sort((a, b) => a.orden - b.orden);
     const accesos = [
       ['registrar', '📝', 'Registrar un trabajo', 'Contratistas y funcionarios'],
       ['consultar', '🔎', 'Consultar con código', 'Sube y revisa tus documentos'],
@@ -812,6 +811,7 @@
     ];
     return `<div class="portada" role="region" aria-label="Portada">
       <section class="pt-hero">
+        <div class="pt-fondo" aria-hidden="true"><i class="pt-foto"></i><i class="pt-velo"></i></div>
         <header class="pt-top">
           <span class="logo" role="img" aria-label="Universidad del Norte"></span>
           <span class="pt-unidad"><b>Seguridad y Salud en el Trabajo</b>Universidad del Norte</span>
@@ -840,12 +840,6 @@
             <li><b>Envía los documentos</b><span>La página te dice cuáles necesitas antes de iniciar y cuáles al finalizar.</span></li>
             <li><b>SST revisa y aprueba</b><span>El equipo de SST revisa cada documento y te avisa si falta algo.</span></li>
           </ol>
-        </div>
-        <div class="pt-bloque">
-          <h2>Ten a la mano</h2>
-          ${generales.length ? `<ul class="pt-docs">${generales.map((q) => `<li>${esc(q.nombre)}</li>`).join('')}</ul>` : ''}
-          <p class="pt-nota">Si el trabajo incluye ${Object.keys(RIESGOS).map(chipRiesgo).join(' ')}, se piden documentos adicionales según el riesgo.</p>
-          <p class="pt-nota">Registra el trabajo con anticipación para que el equipo de SST alcance a revisar los documentos antes de iniciar.</p>
         </div>
       </section>
       <footer class="pt-pie">
