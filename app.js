@@ -825,7 +825,7 @@
         <div class="pt-hero-in">
           <span class="pt-eyebrow">SG-SST · Trabajos de contratistas y funcionarios</span>
           <h1>Registro de control operacional de <em>tareas de riesgo</em></h1>
-          <p class="pt-lead">Aquí podrás registrar los trabajos que vas a realizar en la Universidad del Norte, enviar los documentos de Seguridad y Salud en el Trabajo y consultar su estado en cualquier momento.</p>
+          <p class="pt-lead">Registre sus trabajos de alto riesgo, realice envío de los soportes documentales de la actividad y realice el seguimiento al estado de validación de sus solicitudes.</p>
           <div class="pt-cta">
             <button class="pt-ingresar" data-acc="ingresar">Ingresar <span aria-hidden="true">→</span></button>
             <button class="pt-sec" data-acc="portada-ir" data-p="consultar">Ya tengo un código</button>
@@ -839,10 +839,10 @@
         <div class="pt-bloque">
           <h2>¿Cómo funciona?</h2>
           <ol class="pt-pasos">
-            <li><b>Registra el trabajo</b><span>Fechas, lugar, el área que lo pide y las tareas de alto riesgo que incluye.</span></li>
-            <li><b>Guarda tu código</b><span>Es una palabra con números, por ejemplo PINTURA-4821. Con él vuelves cuando quieras.</span></li>
-            <li><b>Envía los documentos</b><span>La página te dice cuáles necesitas antes de iniciar y cuáles al finalizar.</span></li>
-            <li><b>SST revisa y aprueba</b><span>El equipo de SST revisa cada documento y te avisa si falta algo.</span></li>
+            <li><b>Registra el trabajo</b><span>Especifique el período de ejecución, la ubicación del trabajo, el área responsable de la solicitud y las tareas de alto riesgo asociadas a la actividad.</span></li>
+            <li><b>Conserva tu código de registro</b><span>Es un código único alfanumérico (por ejemplo, <span style="white-space:nowrap">PINTURA-4821</span>) que te permitirá acceder nuevamente a tu solicitud, consultar su estado y dar seguimiento a tu gestión cuando lo necesites.</span></li>
+            <li><b>Carga la documentación requerida</b><span>La plataforma te indicará los documentos de SST que debes presentar antes de iniciar los trabajos y aquellos que deberás entregar una vez finalizados, de acuerdo con las actividades programadas.</span></li>
+            <li><b>Revisión y aprobación por SST</b><span>El equipo de Seguridad y Salud en el Trabajo (SST) verificará la documentación presentada y notificará oportunamente mediante correo automático las observaciones, ajustes o requisitos pendientes para continuar con el proceso de aprobación.</span></li>
           </ol>
         </div>
       </section>
@@ -1755,7 +1755,7 @@
     const tabs = [
       ind && ['induccion', '🎓', `Inducción SST ${ind.anio}`, 'Obligatoria para ingresar al campus'],
       lin && ['lineamientos', '📋', 'Lineamientos SST', 'Para proveedores y contratistas'],
-      ['piezas', '📘', 'Piezas de seguridad', PIEZAS.length ? plural(PIEZAS.length, 'pieza', 'piezas') : 'Material del SG-SST']
+      ['piezas', '📘', 'Guías y recomendaciones técnicas', PIEZAS.length ? `${plural(PIEZAS.length, 'pieza', 'piezas')} del SG-SST` : 'Material del SG-SST']
     ].filter(Boolean);
     if (!tabs.some((t) => t[0] === S.docTab)) S.docTab = tabs[0][0];
     const cuerpo = S.docTab === 'induccion' ? induccionHTML(ind)
