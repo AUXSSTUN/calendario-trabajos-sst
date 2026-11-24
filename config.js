@@ -14,6 +14,9 @@ window.CONFIG = {
   // Correo del usuario del equipo SST creado en Supabase (Authentication → Users)
   SST_EMAIL: "aux_sst@uninorte.edu.co",
 
+  // Correo que recibe el aviso cada vez que alguien registra un trabajo
+  CORREO_AVISOS: "permisotrabajosst_un@uninorte.edu.co",
+
   // Nombre que aparece en la parte superior de la página
   NOMBRE: "Calendario de Trabajos",
   SUBTITULO: "Seguridad y Salud en el Trabajo · Uninorte",
